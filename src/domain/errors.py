@@ -36,6 +36,8 @@ class ErrorCode(Enum):
     # System errors
     DEVICE_INFO_UNAVAILABLE = "DEVICE_INFO_UNAVAILABLE"
     CONFIG_LOAD_FAILED = "CONFIG_LOAD_FAILED"
+    CONFIG_WRITE_FAILED = "CONFIG_WRITE_FAILED"
+    CONFIG_READ_FAILED = "CONFIG_READ_FAILED"
     HARDWARE_ERROR = "HARDWARE_ERROR"
     RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
 
@@ -116,3 +118,10 @@ class ValidationError(ProvisioningError):
     """Validation-related errors"""
 
     pass
+
+
+class ConfigurationError(ProvisioningError):
+    """Exception raised for configuration-related errors."""
+
+    def __init__(self, message: str, code: int = None, severity: str = None):
+        super().__init__(message, code, severity)

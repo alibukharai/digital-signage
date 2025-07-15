@@ -144,25 +144,32 @@ class NetworkProvisioningUseCase:
 
     def get_network_scan(self) -> List[NetworkInfo]:
         """Get available networks"""
-        try:
-            networks = self.network_service.scan_networks()
+        scan_result = self.network_service.scan_networks()
 
+        if scan_result.is_success():
+            networks = scan_result.value
             self.event_bus.publish(
                 EventType.NETWORK_SCAN_COMPLETED,
                 {"network_count": len(networks)},
                 "provisioning_use_case",
             )
-
             return networks
-
-        except Exception as e:
+        else:
             if self.logger:
-                self.logger.error(f"Network scan failed: {e}")
+                self.logger.error(f"Network scan failed: {scan_result.error}")
             return []
 
     def get_connection_status(self) -> ConnectionInfo:
         """Get current connection status"""
-        return self.network_service.get_connection_info()
+        result = self.network_service.get_connection_info()
+
+        if result.is_success():
+            return result.value
+        else:
+            if self.logger:
+                self.logger.error(f"Failed to get connection info: {result.error}")
+            # Return default disconnected status
+            return ConnectionInfo(status="disconnected")
 
     def _on_credentials_received(self, ssid: str, password: str):
         """Handle received WiFi credentials"""
@@ -190,15 +197,28 @@ class NetworkProvisioningUseCase:
             )
 
             # Update display
-            self.display_service.show_status("Connecting to network...")
+            display_result = self.display_service.show_status(
+                "Connecting to network..."
+            )
+            if display_result.is_failure() and self.logger:
+                self.logger.warning(f"Failed to update display: {display_result.error}")
 
             # Attempt connection
-            if self.network_service.connect_to_network(ssid, password):
+            connect_result = self.network_service.connect_to_network(ssid, password)
+            if connect_result.is_success():
                 # Save configuration
-                self.config_service.save_network_config(ssid, password)
+                save_result = self.config_service.save_network_config(ssid, password)
+                if save_result.is_failure() and self.logger:
+                    self.logger.warning(f"Failed to save config: {save_result.error}")
 
                 # Update display
-                self.display_service.show_status("Connected successfully!")
+                success_display = self.display_service.show_status(
+                    "Connected successfully!"
+                )
+                if success_display.is_failure() and self.logger:
+                    self.logger.warning(
+                        f"Failed to update display: {success_display.error}"
+                    )
 
                 # Publish success event
                 self.event_bus.publish(
@@ -213,19 +233,27 @@ class NetworkProvisioningUseCase:
                     self.logger.info(f"Successfully connected to {ssid}")
             else:
                 # Update display
-                self.display_service.show_status("Connection failed. Please try again.")
+                error_display = self.display_service.show_status(
+                    "Connection failed. Please try again."
+                )
+                if error_display.is_failure() and self.logger:
+                    self.logger.warning(
+                        f"Failed to update display: {error_display.error}"
+                    )
 
                 # Publish failure event
                 self.event_bus.publish(
                     EventType.NETWORK_CONNECTION_FAILED,
-                    {"ssid": ssid, "reason": "connection_timeout"},
+                    {"ssid": ssid, "reason": str(connect_result.error)},
                     "provisioning_use_case",
                 )
 
                 self.state_machine.process_event(ProvisioningEvent.CONNECTION_FAILED)
 
                 if self.logger:
-                    self.logger.error(f"Failed to connect to {ssid}")
+                    self.logger.error(
+                        f"Failed to connect to {ssid}: {connect_result.error}"
+                    )
 
         except Exception as e:
             if self.logger:

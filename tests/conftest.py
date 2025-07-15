@@ -2,21 +2,42 @@
 Common test fixtures and utilities for Rock Pi 3399 provisioning tests.
 """
 
-import pytest
 import asyncio
 import json
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock
 
-from src.domain.configuration import ProvisioningConfig, load_config
-from src.domain.state import ProvisioningStateMachine
-from src.domain.events import EventBus
-from src.application.dependency_injection import ServiceContainer
+import pytest
+
+from src.application.dependency_injection import Container
 from src.application.provisioning_orchestrator import ProvisioningOrchestrator
-from src.interfaces import DeviceState, ProvisioningEvent, DeviceInfo, NetworkInfo, ConnectionInfo, ConnectionStatus
+from src.domain.configuration import ProvisioningConfig, load_config
+from src.domain.events import EventBus
+from src.domain.state import ProvisioningEvent, ProvisioningStateMachine
+from src.interfaces import (
+    ConnectionInfo,
+    ConnectionStatus,
+    DeviceInfo,
+    DeviceState,
+    NetworkInfo,
+)
+
+# Import test doubles for clean testing
+from tests.test_doubles import (
+    TestBluetoothService,
+    TestConfigurationService,
+    TestDeviceInfoProvider,
+    TestDisplayService,
+    TestFactoryResetService,
+    TestHealthMonitorService,
+    TestLogger,
+    TestNetworkService,
+    TestOwnershipService,
+    TestSecurityService,
+)
 
 
 @pytest.fixture
@@ -54,7 +75,7 @@ def test_config(temp_config_dir):
                 "max_failed_attempts": 3,
                 "lockout_duration_seconds": 3600,
                 "session_timeout_minutes": 15,
-            }
+            },
         },
         "network": {
             "connection_timeout": 30,
@@ -79,13 +100,13 @@ def test_config(temp_config_dir):
             "factory_reset_hold_time": 5.5,
             "config_file_path": f"{temp_config_dir}/config.json",
             "credentials_file_path": f"{temp_config_dir}/credentials.json",
-        }
+        },
     }
-    
+
     config_file = Path(temp_config_dir) / "config.json"
-    with open(config_file, 'w') as f:
+    with open(config_file, "w") as f:
         json.dump(config_data, f, indent=2)
-    
+
     return load_config(str(config_file))
 
 
@@ -104,7 +125,7 @@ def state_machine(event_bus):
 @pytest.fixture
 def service_container(test_config):
     """Provide a configured service container."""
-    container = ServiceContainer()
+    container = Container()
     container.register_config(test_config)
     return container
 
@@ -123,7 +144,7 @@ def valid_device_info():
         mac_address="AA:BB:CC:DD:EE:FF",
         hardware_version="Rock Pi 3399 v1.4",
         firmware_version="2.0.0",
-        capabilities=["wifi", "bluetooth", "display", "gpio"]
+        capabilities=["wifi", "bluetooth", "display", "gpio"],
     )
 
 
@@ -135,31 +156,27 @@ def valid_network_info():
             ssid="TestNetwork",
             signal_strength=-45,
             security_type="WPA2",
-            frequency=2400
+            frequency=2400,
         ),
         NetworkInfo(
             ssid="TestNetwork5G",
             signal_strength=-50,
             security_type="WPA3",
-            frequency=5000
+            frequency=5000,
         ),
         NetworkInfo(
             ssid="OpenNetwork",
             signal_strength=-60,
             security_type="Open",
-            frequency=2400
-        )
+            frequency=2400,
+        ),
     ]
 
 
 @pytest.fixture
 def valid_credentials():
     """Provide valid WiFi credentials for testing."""
-    return {
-        "ssid": "TestNetwork",
-        "password": "TestPassword123!",
-        "security": "WPA2"
-    }
+    return {"ssid": "TestNetwork", "password": "TestPassword123!", "security": "WPA2"}
 
 
 @pytest.fixture
@@ -176,17 +193,13 @@ def invalid_credentials():
         "oversized_ssid": {
             "ssid": "A" * 300,  # Over 256 character limit
             "password": "validpassword",
-            "security": "WPA2"
+            "security": "WPA2",
         },
         "missing_required": {
             "ssid": "TestNetwork"
             # Missing password
         },
-        "empty_values": {
-            "ssid": "",
-            "password": "",
-            "security": "WPA2"
-        }
+        "empty_values": {"ssid": "", "password": "", "security": "WPA2"},
     }
 
 
@@ -198,7 +211,7 @@ def connection_info_connected():
         ssid="TestNetwork",
         ip_address="192.168.1.100",
         signal_strength=-45,
-        connection_time=None  # Will be set when connection is established
+        connection_time=None,  # Will be set when connection is established
     )
 
 
@@ -210,7 +223,7 @@ def connection_info_disconnected():
         ssid=None,
         ip_address=None,
         signal_strength=None,
-        connection_time=None
+        connection_time=None,
     )
 
 
@@ -250,18 +263,18 @@ async def system_in_ready_state(state_machine):
 
 class TestWiFiNetwork:
     """Helper class to simulate WiFi network for testing."""
-    
+
     def __init__(self, ssid: str, password: str, available: bool = True):
         self.ssid = ssid
         self.password = password
         self.available = available
         self.connection_delay = 0.1  # Simulate connection time
-    
+
     async def connect(self, provided_password: str) -> bool:
         """Simulate connection attempt."""
         if not self.available:
             return False
-        
+
         await asyncio.sleep(self.connection_delay)
         return provided_password == self.password
 
@@ -272,28 +285,30 @@ def test_wifi_networks():
     return {
         "TestNetwork": TestWiFiNetwork("TestNetwork", "TestPassword123!"),
         "TestNetwork5G": TestWiFiNetwork("TestNetwork5G", "TestPassword5G!"),
-        "UnavailableNetwork": TestWiFiNetwork("UnavailableNetwork", "password", available=False),
+        "UnavailableNetwork": TestWiFiNetwork(
+            "UnavailableNetwork", "password", available=False
+        ),
     }
 
 
 class BluetoothTestHelper:
     """Helper class for Bluetooth testing scenarios."""
-    
+
     def __init__(self):
         self.is_connected = False
         self.advertising = False
         self.connection_count = 0
         self.max_disconnection_time = 10.0  # seconds
-    
+
     async def connect(self):
         """Simulate BLE connection."""
         self.is_connected = True
         self.connection_count += 1
-    
+
     async def disconnect(self):
         """Simulate BLE disconnection."""
         self.is_connected = False
-    
+
     async def simulate_connection_loss(self, duration: float = 5.0):
         """Simulate temporary connection loss."""
         await self.disconnect()
@@ -310,13 +325,13 @@ def bluetooth_test_helper():
 
 class GPIOTestHelper:
     """Helper class for GPIO testing scenarios."""
-    
+
     def __init__(self, pin: int = 18):
         self.pin = pin
         self.is_pressed = False
         self.press_duration = 0.0
         self.reset_threshold = 5.5  # seconds
-    
+
     async def press_and_hold(self, duration: float):
         """Simulate pressing and holding the GPIO button."""
         self.is_pressed = True
@@ -338,29 +353,56 @@ def encrypted_credentials():
     # This would normally use the actual SecurityService encryption
     # For testing, we'll use a simple base64 encoding as placeholder
     import base64
-    
-    valid_creds = json.dumps({
-        "ssid": "TestNetwork", 
-        "password": "TestPassword123!",
-        "security": "WPA2"
-    })
-    
+
+    valid_creds = json.dumps(
+        {"ssid": "TestNetwork", "password": "TestPassword123!", "security": "WPA2"}
+    )
+
     encrypted = base64.b64encode(valid_creds.encode()).decode()
-    
-    return {
-        "encrypted": encrypted,
-        "plaintext": valid_creds
-    }
+
+    return {"encrypted": encrypted, "plaintext": valid_creds}
+
+
+@pytest.fixture
+def test_service_factory():
+    """Factory for creating clean test service instances."""
+
+    def create_services(logger=None):
+        if logger is None:
+            logger = TestLogger()
+
+        return {
+            "logger": logger,
+            "network": TestNetworkService(logger),
+            "bluetooth": TestBluetoothService(logger),
+            "display": TestDisplayService(logger),
+            "configuration": TestConfigurationService(logger),
+            "security": TestSecurityService(logger),
+            "device_info": TestDeviceInfoProvider(logger),
+            "ownership": TestOwnershipService(logger),
+            "factory_reset": TestFactoryResetService(logger),
+            "health_monitor": TestHealthMonitorService(logger),
+        }
+
+    return create_services
+
+
+@pytest.fixture
+def test_services(test_service_factory):
+    """Provide a clean set of test service instances."""
+    return test_service_factory()
 
 
 # Test Utilities
-def assert_state_transition(state_machine, expected_from: DeviceState, expected_to: DeviceState):
+def assert_state_transition(
+    state_machine, expected_from: DeviceState, expected_to: DeviceState
+):
     """Assert that a state transition occurred as expected."""
     history = state_machine.get_state_history(limit=1)
     if history:
         last_transition = history[-1]
-        assert last_transition['from_state'] == expected_from
-        assert last_transition['to_state'] == expected_to
+        assert last_transition["from_state"] == expected_from
+        assert last_transition["to_state"] == expected_to
     assert state_machine.get_current_state() == expected_to
 
 
@@ -371,10 +413,12 @@ def assert_event_published(event_bus, event_type: str, timeout: float = 1.0):
     assert event_bus is not None
 
 
-async def wait_for_state(state_machine, expected_state: DeviceState, timeout: float = 30.0):
+async def wait_for_state(
+    state_machine, expected_state: DeviceState, timeout: float = 30.0
+):
     """Wait for state machine to reach expected state or timeout."""
     start_time = asyncio.get_event_loop().time()
-    
+
     while state_machine.get_current_state() != expected_state:
         if asyncio.get_event_loop().time() - start_time > timeout:
             raise TimeoutError(
@@ -387,7 +431,7 @@ async def wait_for_state(state_machine, expected_state: DeviceState, timeout: fl
 async def wait_for_connection(network_service, timeout: float = 30.0):
     """Wait for network connection to be established."""
     start_time = asyncio.get_event_loop().time()
-    
+
     while not network_service.is_connected():
         if asyncio.get_event_loop().time() - start_time > timeout:
             raise TimeoutError("Timeout waiting for network connection")

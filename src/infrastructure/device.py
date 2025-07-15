@@ -1,5 +1,5 @@
 """
-Device information provider implementation
+Device information provider implementation with improved error handling
 """
 
 import json
@@ -7,6 +7,7 @@ import subprocess
 import uuid
 from typing import Optional
 
+from ..common.result_handling import Result
 from ..domain.errors import ErrorCode, ErrorSeverity, SystemError
 from ..interfaces import DeviceInfo, IDeviceInfoProvider, ILogger
 
@@ -46,13 +47,50 @@ class DeviceInfoProvider(IDeviceInfoProvider):
         return f"ROCKPI:{device_id}:{mac.replace(':', '')}"
 
     def _collect_device_info(self) -> DeviceInfo:
-        """Collect comprehensive device information"""
+        """Collect comprehensive device information with consistent error handling"""
         try:
-            device_id = self.get_device_id()
-            mac_address = self.get_mac_address()
-            hardware_version = self._get_hardware_version()
-            firmware_version = self._get_firmware_version()
-            capabilities = self._get_capabilities()
+            # Use Result pattern internally for consistent error handling
+            device_id_result = self._generate_device_id_safe()
+            mac_address_result = self._get_mac_address_safe()
+            hardware_version_result = self._get_hardware_version_safe()
+            firmware_version_result = self._get_firmware_version_safe()
+            capabilities_result = self._get_capabilities_safe()
+
+            # Handle any failures by falling back to defaults or raising with context
+            device_id = (
+                device_id_result.value if device_id_result.is_success() else "UNKNOWN"
+            )
+            mac_address = (
+                mac_address_result.value
+                if mac_address_result.is_success()
+                else "00:00:00:00:00:00"
+            )
+            hardware_version = (
+                hardware_version_result.value
+                if hardware_version_result.is_success()
+                else "Unknown"
+            )
+            firmware_version = (
+                firmware_version_result.value
+                if firmware_version_result.is_success()
+                else "Unknown"
+            )
+            capabilities = (
+                capabilities_result.value
+                if capabilities_result.is_success()
+                else ["wifi", "bluetooth"]
+            )
+
+            # Log any failures for debugging
+            for result, name in [
+                (device_id_result, "device_id"),
+                (mac_address_result, "mac_address"),
+                (hardware_version_result, "hardware_version"),
+                (firmware_version_result, "firmware_version"),
+                (capabilities_result, "capabilities"),
+            ]:
+                if result.is_failure() and self.logger:
+                    self.logger.warning(f"Failed to get {name}: {result.error}")
 
             return DeviceInfo(
                 device_id=device_id,
@@ -63,11 +101,12 @@ class DeviceInfoProvider(IDeviceInfoProvider):
             )
 
         except Exception as e:
+            error_msg = f"Critical failure collecting device info: {e}"
             if self.logger:
-                self.logger.error(f"Failed to collect device info: {e}")
+                self.logger.error(error_msg)
             raise SystemError(
                 ErrorCode.DEVICE_INFO_UNAVAILABLE,
-                f"Cannot collect device information: {str(e)}",
+                error_msg,
                 ErrorSeverity.HIGH,
             )
 
@@ -104,6 +143,20 @@ class DeviceInfoProvider(IDeviceInfoProvider):
             if self.logger:
                 self.logger.warning(f"Device ID generation fallback: {e}")
             return str(uuid.uuid4()).split("-")[0].upper()
+
+    def _generate_device_id_safe(self) -> Result[str, Exception]:
+        """Generate device ID using Result pattern for consistent error handling"""
+        try:
+            device_id = self._generate_device_id()
+            return Result.success(device_id)
+        except Exception as e:
+            return Result.failure(
+                SystemError(
+                    ErrorCode.DEVICE_INFO_UNAVAILABLE,
+                    f"Failed to generate device ID: {e}",
+                    ErrorSeverity.MEDIUM,
+                )
+            )
 
     def _get_mac_address(self) -> str:
         """Get MAC address of primary network interface"""
@@ -151,6 +204,28 @@ class DeviceInfoProvider(IDeviceInfoProvider):
                 self.logger.error(f"Failed to get MAC address: {e}")
             return "00:00:00:00:00:00"
 
+    def _get_mac_address_safe(self) -> Result[str, Exception]:
+        """Get MAC address using Result pattern for consistent error handling"""
+        try:
+            mac_address = self._get_mac_address()
+            if mac_address == "00:00:00:00:00:00":
+                return Result.failure(
+                    SystemError(
+                        ErrorCode.DEVICE_INFO_UNAVAILABLE,
+                        "No valid MAC address found",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
+            return Result.success(mac_address)
+        except Exception as e:
+            return Result.failure(
+                SystemError(
+                    ErrorCode.DEVICE_INFO_UNAVAILABLE,
+                    f"Failed to get MAC address: {e}",
+                    ErrorSeverity.MEDIUM,
+                )
+            )
+
     def _get_hardware_version(self) -> str:
         """Get hardware version information"""
         try:
@@ -194,6 +269,20 @@ class DeviceInfoProvider(IDeviceInfoProvider):
                 self.logger.warning(f"Failed to get hardware version: {e}")
             return "Unknown"
 
+    def _get_hardware_version_safe(self) -> Result[str, Exception]:
+        """Get hardware version using Result pattern for consistent error handling"""
+        try:
+            hardware_version = self._get_hardware_version()
+            return Result.success(hardware_version)
+        except Exception as e:
+            return Result.failure(
+                SystemError(
+                    ErrorCode.DEVICE_INFO_UNAVAILABLE,
+                    f"Failed to get hardware version: {e}",
+                    ErrorSeverity.LOW,
+                )
+            )
+
     def _get_firmware_version(self) -> str:
         """Get firmware/kernel version"""
         try:
@@ -209,6 +298,20 @@ class DeviceInfoProvider(IDeviceInfoProvider):
                 self.logger.warning(f"Failed to get firmware version: {e}")
             return "Unknown"
 
+    def _get_firmware_version_safe(self) -> Result[str, Exception]:
+        """Get firmware version using Result pattern for consistent error handling"""
+        try:
+            firmware_version = self._get_firmware_version()
+            return Result.success(firmware_version)
+        except Exception as e:
+            return Result.failure(
+                SystemError(
+                    ErrorCode.DEVICE_INFO_UNAVAILABLE,
+                    f"Failed to get firmware version: {e}",
+                    ErrorSeverity.LOW,
+                )
+            )
+
     def _get_capabilities(self) -> list[str]:
         """Get device capabilities"""
         capabilities = []
@@ -216,35 +319,65 @@ class DeviceInfoProvider(IDeviceInfoProvider):
         # Check for WiFi capability
         try:
             result = subprocess.run(
-                ["nmcli", "device", "status"], capture_output=True, text=True
+                ["nmcli", "device", "status"], capture_output=True, text=True, timeout=5
             )
 
             if result.returncode == 0:
                 if "wifi" in result.stdout.lower():
                     capabilities.append("wifi")
-        except Exception:
-            pass
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+        ) as e:
+            if self.logger:
+                self.logger.debug(f"WiFi capability check failed: {e}")
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"Unexpected error checking WiFi capability: {e}")
 
         # Check for Bluetooth capability
         try:
-            result = subprocess.run(["hciconfig"], capture_output=True, text=True)
+            result = subprocess.run(
+                ["hciconfig"], capture_output=True, text=True, timeout=5
+            )
 
             if result.returncode == 0 and "hci" in result.stdout:
                 capabilities.append("bluetooth")
-        except Exception:
-            pass
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+        ) as e:
+            if self.logger:
+                self.logger.debug(f"Bluetooth capability check failed: {e}")
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(
+                    f"Unexpected error checking Bluetooth capability: {e}"
+                )
 
         # Check for Ethernet capability
         try:
             result = subprocess.run(
-                ["ip", "link", "show"], capture_output=True, text=True
+                ["ip", "link", "show"], capture_output=True, text=True, timeout=5
             )
 
             if result.returncode == 0:
                 if any(iface in result.stdout for iface in ["eth", "enp", "eno"]):
                     capabilities.append("ethernet")
-        except Exception:
-            pass
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+        ) as e:
+            if self.logger:
+                self.logger.debug(f"Ethernet capability check failed: {e}")
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(
+                    f"Unexpected error checking Ethernet capability: {e}"
+                )
 
         # Check for display capability
         try:
@@ -252,7 +385,14 @@ class DeviceInfoProvider(IDeviceInfoProvider):
 
             if os.environ.get("DISPLAY") or os.path.exists("/dev/fb0"):
                 capabilities.append("display")
-        except Exception:
+        except (OSError, PermissionError) as e:
+            if self.logger:
+                self.logger.debug(f"Display capability check failed: {e}")
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(
+                    f"Unexpected error checking display capability: {e}"
+                )
             pass
 
         # Default capabilities for Rock Pi 3399
@@ -260,3 +400,17 @@ class DeviceInfoProvider(IDeviceInfoProvider):
             capabilities = ["wifi", "bluetooth", "ethernet", "display"]
 
         return capabilities
+
+    def _get_capabilities_safe(self) -> Result[list[str], Exception]:
+        """Get device capabilities using Result pattern for consistent error handling"""
+        try:
+            capabilities = self._get_capabilities()
+            return Result.success(capabilities)
+        except Exception as e:
+            return Result.failure(
+                SystemError(
+                    ErrorCode.DEVICE_INFO_UNAVAILABLE,
+                    f"Failed to get device capabilities: {e}",
+                    ErrorSeverity.LOW,
+                )
+            )

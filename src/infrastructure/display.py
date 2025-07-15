@@ -1,5 +1,5 @@
 """
-Display service implementation
+Display service implementation with consistent error handling using Result pattern
 """
 
 import os
@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from ..common.result_handling import Result
 from ..domain.configuration import DisplayConfig
 from ..domain.errors import DisplayError, ErrorCode, ErrorSeverity
 from ..interfaces import IDisplayService, ILogger
@@ -36,8 +37,8 @@ class DisplayService(IDisplayService):
                     "QR code libraries not available, display functionality will be limited"
                 )
 
-    def show_qr_code(self, data: str) -> bool:
-        """Display QR code"""
+    def show_qr_code(self, data: str) -> Result[bool, Exception]:
+        """Display QR code with consistent error handling"""
         try:
             if self.logger:
                 self.logger.info("Generating and displaying QR code")
@@ -48,7 +49,7 @@ class DisplayService(IDisplayService):
                         "QR code display simulated (libraries not available)"
                     )
                 self.is_active = True
-                return True
+                return Result.success(True)
 
             # Generate QR code
             qr = qrcode.QRCode(
@@ -71,19 +72,23 @@ class DisplayService(IDisplayService):
             display_img.save(image_path)
 
             # Display image
-            return self._display_image(image_path)
+            result = self._display_image(image_path)
+            return Result.success(result)
 
         except Exception as e:
+            error_msg = f"Failed to generate/display QR code: {str(e)}"
             if self.logger:
-                self.logger.error(f"Failed to show QR code: {e}")
-            raise DisplayError(
-                ErrorCode.QR_CODE_GENERATION_FAILED,
-                f"Failed to generate/display QR code: {str(e)}",
-                ErrorSeverity.MEDIUM,
+                self.logger.error(error_msg)
+            return Result.failure(
+                DisplayError(
+                    ErrorCode.QR_CODE_GENERATION_FAILED,
+                    error_msg,
+                    ErrorSeverity.MEDIUM,
+                )
             )
 
-    def show_status(self, message: str) -> bool:
-        """Display status message"""
+    def show_status(self, message: str) -> Result[bool, Exception]:
+        """Display status message with consistent error handling"""
         try:
             if self.logger:
                 self.logger.info(f"Displaying status: {message}")
@@ -91,7 +96,7 @@ class DisplayService(IDisplayService):
             if not QR_AVAILABLE:
                 if self.logger:
                     self.logger.info(f"Status display simulated: {message}")
-                return True
+                return Result.success(True)
 
             # Create status image
             status_img = self._create_status_image(message)
@@ -101,15 +106,23 @@ class DisplayService(IDisplayService):
             status_img.save(image_path)
 
             # Display image
-            return self._display_image(image_path)
+            result = self._display_image(image_path)
+            return Result.success(result)
 
         except Exception as e:
+            error_msg = f"Failed to show status: {e}"
             if self.logger:
-                self.logger.error(f"Failed to show status: {e}")
-            return False
+                self.logger.error(error_msg)
+            return Result.failure(
+                DisplayError(
+                    ErrorCode.DISPLAY_ERROR,
+                    error_msg,
+                    ErrorSeverity.MEDIUM,
+                )
+            )
 
-    def clear_display(self) -> bool:
-        """Clear the display"""
+    def clear_display(self) -> Result[bool, Exception]:
+        """Clear the display with consistent error handling"""
         try:
             if self.logger:
                 self.logger.info("Clearing display")
@@ -133,12 +146,19 @@ class DisplayService(IDisplayService):
             if self.logger:
                 self.logger.info("Display cleared")
 
-            return True
+            return Result.success(True)
 
         except Exception as e:
+            error_msg = f"Failed to clear display: {e}"
             if self.logger:
-                self.logger.error(f"Failed to clear display: {e}")
-            return False
+                self.logger.error(error_msg)
+            return Result.failure(
+                DisplayError(
+                    ErrorCode.DISPLAY_ERROR,
+                    error_msg,
+                    ErrorSeverity.MEDIUM,
+                )
+            )
 
     def is_display_active(self) -> bool:
         """Check if display is active"""
@@ -290,31 +310,3 @@ class DisplayService(IDisplayService):
             if self.logger:
                 self.logger.error(f"Failed to display image: {e}")
             return False
-
-
-class MockDisplayService(IDisplayService):
-    """Mock implementation for testing"""
-
-    def __init__(self, logger: Optional[ILogger] = None):
-        self.logger = logger
-        self.is_active = False
-
-    def show_qr_code(self, data: str) -> bool:
-        if self.logger:
-            self.logger.info(f"Mock QR code displayed: {data}")
-        self.is_active = True
-        return True
-
-    def show_status(self, message: str) -> bool:
-        if self.logger:
-            self.logger.info(f"Mock status displayed: {message}")
-        return True
-
-    def clear_display(self) -> bool:
-        if self.logger:
-            self.logger.info("Mock display cleared")
-        self.is_active = False
-        return True
-
-    def is_display_active(self) -> bool:
-        return self.is_active

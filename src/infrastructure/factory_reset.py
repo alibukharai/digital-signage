@@ -1,5 +1,5 @@
 """
-Factory reset service implementation
+Factory reset service implementation with consistent error handling using Result pattern
 """
 
 import json
@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from ..common.result_handling import Result
 from ..domain.errors import ErrorCode, ErrorSeverity, SystemError
 from ..interfaces import IFactoryResetService, ILogger
 
@@ -47,15 +48,27 @@ class FactoryResetService(IFactoryResetService):
         """Check if reset is available"""
         return GPIO_AVAILABLE or self.recovery_mode
 
-    def perform_reset(self, confirmation_code: str) -> Tuple[bool, str]:
-        """Perform factory reset"""
+    def perform_reset(self, confirmation_code: str) -> Result[bool, Exception]:
+        """Perform factory reset using Result pattern for consistent error handling"""
         try:
             if not self.recovery_mode:
-                return False, "Device not in recovery mode"
+                return Result.failure(
+                    SystemError(
+                        ErrorCode.SYSTEM_ERROR,
+                        "Device not in recovery mode",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
             # Validate confirmation code
             if not self._validate_confirmation_code(confirmation_code):
-                return False, "Invalid confirmation code"
+                return Result.failure(
+                    SystemError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        "Invalid confirmation code",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
             if self.logger:
                 self.logger.critical("Starting factory reset procedure")
@@ -77,15 +90,28 @@ class FactoryResetService(IFactoryResetService):
                 reset_log["status"] = "completed"
                 if self.logger:
                     self.logger.critical("Factory reset completed successfully")
-                return True, "Factory reset completed"
+                return Result.success(True)
             else:
                 reset_log["status"] = "failed"
-                return False, "Factory reset failed"
+                return Result.failure(
+                    SystemError(
+                        ErrorCode.SYSTEM_ERROR,
+                        "Factory reset failed",
+                        ErrorSeverity.HIGH,
+                    )
+                )
 
         except Exception as e:
+            error_msg = f"Reset error: {str(e)}"
             if self.logger:
                 self.logger.error(f"Factory reset error: {e}")
-            return False, f"Reset error: {str(e)}"
+            return Result.failure(
+                SystemError(
+                    ErrorCode.SYSTEM_ERROR,
+                    error_msg,
+                    ErrorSeverity.HIGH,
+                )
+            )
 
         finally:
             # Update log
@@ -96,27 +122,34 @@ class FactoryResetService(IFactoryResetService):
             except Exception:
                 pass
 
-    def get_reset_info(self) -> Dict[str, Any]:
-        """Get reset information"""
-        info = {
-            "available": self.is_reset_available(),
-            "recovery_mode": self.recovery_mode,
-            "gpio_available": GPIO_AVAILABLE,
-            "monitoring": self.is_monitoring,
-        }
+    def get_reset_info(self) -> Result[Dict[str, Any], Exception]:
+        """Get reset information using Result pattern for consistent error handling"""
+        try:
+            info = {
+                "available": self.is_reset_available(),
+                "recovery_mode": self.recovery_mode,
+                "gpio_available": GPIO_AVAILABLE,
+                "monitoring": self.is_monitoring,
+            }
 
-        if self.recovery_mode and self.recovery_start_time:
-            info["recovery_duration"] = time.time() - self.recovery_start_time
+            if self.recovery_mode and self.recovery_start_time:
+                info["recovery_duration"] = time.time() - self.recovery_start_time
 
-        # Add recovery log if available
-        if self.recovery_file.exists():
-            try:
-                with open(self.recovery_file, "r") as f:
-                    info["last_reset_attempt"] = json.load(f)
-            except Exception:
-                pass
+            # Add recovery log if available
+            if self.recovery_file.exists():
+                try:
+                    with open(self.recovery_file, "r") as f:
+                        info["last_reset_attempt"] = json.load(f)
+                except Exception:
+                    pass
 
-        return info
+            return Result.success(info)
+
+        except Exception as e:
+            error_msg = f"Failed to get reset info: {str(e)}"
+            if self.logger:
+                self.logger.error(error_msg)
+            return Result.failure(Exception(error_msg))
 
     def start_monitoring(self, reset_callback: Optional[Callable] = None) -> bool:
         """Start monitoring for factory reset trigger"""
@@ -313,30 +346,3 @@ class FactoryResetService(IFactoryResetService):
                 return f.read().strip()
         except FileNotFoundError:
             return "unknown"
-
-
-class MockFactoryResetService(IFactoryResetService):
-    """Mock implementation for testing"""
-
-    def __init__(self, logger: Optional[ILogger] = None):
-        self.logger = logger
-        self.recovery_mode = False
-
-    def is_reset_available(self) -> bool:
-        return True
-
-    def perform_reset(self, confirmation_code: str) -> Tuple[bool, str]:
-        if self.logger:
-            self.logger.info(
-                f"Mock factory reset performed with code: {confirmation_code}"
-            )
-        return True, "Mock reset completed"
-
-    def get_reset_info(self) -> Dict[str, Any]:
-        return {"available": True, "recovery_mode": self.recovery_mode, "mock": True}
-
-    def trigger_recovery_mode(self):
-        """Trigger recovery mode for testing"""
-        self.recovery_mode = True
-        if self.logger:
-            self.logger.info("Mock recovery mode triggered")

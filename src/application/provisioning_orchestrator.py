@@ -1,5 +1,5 @@
 """
-Main orchestrator for the provisioning system
+Main orchestrator for the provisioning system - Now follows SRP
 """
 
 import asyncio
@@ -8,23 +8,15 @@ import sys
 from typing import Any, Dict, Optional
 
 from ..domain.configuration import ProvisioningConfig
-from ..domain.events import EventBus, EventType, get_event_bus
+from ..domain.events import EventBus, get_event_bus
 from ..domain.state import ProvisioningEvent, ProvisioningStateMachine
 from ..domain.validation import ValidationService
-from ..interfaces import (
-    DeviceState,
-    IBluetoothService,
-    IConfigurationService,
-    IDeviceInfoProvider,
-    IDisplayService,
-    IFactoryResetService,
-    IHealthMonitor,
-    ILogger,
-    INetworkService,
-    IOwnershipService,
-    ISecurityService,
-)
+from ..interfaces import ILogger
+from .background_task_manager import BackgroundTaskManager
 from .dependency_injection import Container
+from .provisioning_coordinator import ProvisioningCoordinator
+from .service_manager import ServiceManager
+from .signal_handler import SignalHandler
 from .use_cases import (
     FactoryResetUseCase,
     NetworkProvisioningUseCase,
@@ -34,23 +26,17 @@ from .use_cases import (
 
 
 class ProvisioningOrchestrator:
-    """Main orchestrator for the provisioning system"""
+    """Main orchestrator - Now focused on coordination only"""
 
     def __init__(self, config: ProvisioningConfig, container: Container):
         self.config = config
         self.container = container
-
-        # Get services from container
         self.logger = container.resolve(ILogger)
-        self.device_info_provider = container.resolve(IDeviceInfoProvider)
-        self.network_service = container.resolve(INetworkService)
-        self.bluetooth_service = container.resolve(IBluetoothService)
-        self.display_service = container.resolve(IDisplayService)
-        self.security_service = container.resolve(ISecurityService)
-        self.config_service = container.resolve(IConfigurationService)
-        self.ownership_service = container.resolve(IOwnershipService)
-        self.factory_reset_service = container.resolve(IFactoryResetService)
-        self.health_monitor = container.resolve(IHealthMonitor)
+
+        # Separated components following SRP
+        self.service_manager = ServiceManager(container, self.logger)
+        self.task_manager = BackgroundTaskManager(self.logger)
+        self.signal_handler = SignalHandler(self.logger)
 
         # Create domain services
         self.event_bus = get_event_bus()
@@ -58,12 +44,55 @@ class ProvisioningOrchestrator:
         self.state_machine = ProvisioningStateMachine(self.event_bus, self.logger)
 
         # Create use cases
+        self._create_use_cases()
+
+        # Create coordinator
+        self.coordinator = ProvisioningCoordinator(
+            self.state_machine,
+            self.event_bus,
+            self.validation_service,
+            self.network_provisioning,
+            self.owner_setup,
+            self.system_health,
+            self.logger,
+        )
+
+        # Setup signal handling
+        self.signal_handler.register_shutdown_callback(self.stop)
+        self.signal_handler.setup_signal_handlers()
+
+        self.logger.info("Provisioning orchestrator initialized")
+
+    def _create_use_cases(self) -> None:
+        """Create use cases with dependencies from container"""
+        from ..interfaces import (
+            IBluetoothService,
+            IConfigurationService,
+            IDisplayService,
+            IFactoryResetService,
+            IHealthMonitor,
+            INetworkService,
+            IOwnershipService,
+            ISecurityService,
+        )
+
+        # Get services from container
+        network_service = self.container.resolve(INetworkService)
+        bluetooth_service = self.container.resolve(IBluetoothService)
+        display_service = self.container.resolve(IDisplayService)
+        security_service = self.container.resolve(ISecurityService)
+        config_service = self.container.resolve(IConfigurationService)
+        ownership_service = self.container.resolve(IOwnershipService)
+        factory_reset_service = self.container.resolve(IFactoryResetService)
+        health_monitor = self.container.resolve(IHealthMonitor)
+
+        # Create use cases
         self.network_provisioning = NetworkProvisioningUseCase(
-            self.network_service,
-            self.bluetooth_service,
-            self.display_service,
-            self.security_service,
-            self.config_service,
+            network_service,
+            bluetooth_service,
+            display_service,
+            security_service,
+            config_service,
             self.validation_service,
             self.event_bus,
             self.state_machine,
@@ -71,75 +100,39 @@ class ProvisioningOrchestrator:
         )
 
         self.owner_setup = OwnerSetupUseCase(
-            self.ownership_service,
-            self.security_service,
+            ownership_service,
+            security_service,
             self.validation_service,
             self.event_bus,
             self.logger,
         )
 
         self.factory_reset = FactoryResetUseCase(
-            self.factory_reset_service,
-            self.ownership_service,
-            self.config_service,
+            factory_reset_service,
+            ownership_service,
+            config_service,
             self.event_bus,
             self.logger,
         )
 
         self.system_health = SystemHealthUseCase(
-            self.health_monitor, self.event_bus, self.logger
+            health_monitor, self.event_bus, self.logger
         )
-
-        # State tracking
-        self.is_running = False
-        self.background_tasks = []
-
-        # Setup signal handlers
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-
-        self.logger.info("Provisioning orchestrator initialized")
 
     async def start(self) -> bool:
         """Start the provisioning system"""
         try:
-            self.is_running = True
             self.logger.info("Starting Rock Pi 3399 provisioning system")
 
-            # Get device information
-            device_info = self.device_info_provider.get_device_info()
-            self.logger.info(f"Device ID: {device_info.device_id}")
-            self.logger.info(f"MAC Address: {device_info.mac_address}")
-
             # Start background services
-            await self._start_background_services()
+            await self.service_manager.start_services()
 
-            # Check if network is already configured
-            if self.network_service.is_connected():
-                self.logger.info("Device already connected to network")
-                self.state_machine.process_event(ProvisioningEvent.NETWORK_CONNECTED)
-                return True
-
-            # Check owner setup requirements
-            if (
-                self.config.security.require_owner_setup
-                and not self.owner_setup.is_owner_registered()
-            ):
-                self.logger.info("Starting owner setup mode")
-                if not self.owner_setup.start_setup():
-                    self.logger.error("Failed to start owner setup")
-                    return False
-
-                # Wait for owner registration (in real implementation, this would be event-driven)
-                await self._wait_for_owner_setup()
-
-            # Start network provisioning
-            self.logger.info("Starting network provisioning")
-            success = await self.network_provisioning.start_provisioning(device_info)
+            # Start provisioning coordination
+            success = await self.coordinator.start_provisioning()
 
             if success:
-                # Wait for provisioning to complete
-                await self._wait_for_provisioning()
+                # Setup factory reset monitoring
+                await self._setup_factory_reset_monitoring()
 
             return success
 
@@ -151,21 +144,12 @@ class ProvisioningOrchestrator:
         """Stop the provisioning system"""
         try:
             self.logger.info("Stopping provisioning system")
-            self.is_running = False
 
-            # Stop provisioning
-            await self.network_provisioning.stop_provisioning()
+            # Stop all background tasks
+            await self.task_manager.stop_all_tasks()
 
-            # Stop background services
-            await self._stop_background_services()
-
-            # Cancel background tasks
-            for task in self.background_tasks:
-                if not task.done():
-                    task.cancel()
-
-            if self.background_tasks:
-                await asyncio.gather(*self.background_tasks, return_exceptions=True)
+            # Stop services
+            await self.service_manager.stop_services()
 
             self.logger.info("Provisioning system stopped")
 
@@ -176,220 +160,78 @@ class ProvisioningOrchestrator:
         """Get comprehensive system status"""
         try:
             return {
-                "state": self.state_machine.get_current_state().value,
-                "running": self.is_running,
-                "device_info": {
-                    "device_id": self.device_info_provider.get_device_id(),
-                    "mac_address": self.device_info_provider.get_mac_address(),
-                },
-                "network": {
-                    "connected": self.network_service.is_connected(),
-                    "connection_info": self.network_service.get_connection_info().__dict__,
-                },
-                "bluetooth": {"advertising": self.bluetooth_service.is_advertising()},
-                "display": {"active": self.display_service.is_display_active()},
-                "owner": {
-                    "registered": self.owner_setup.is_owner_registered(),
-                    "setup_info": self.owner_setup.get_setup_info(),
-                },
-                "factory_reset": {
-                    "available": self.factory_reset.is_reset_available(),
-                    "info": self.factory_reset.get_reset_info(),
-                },
-                "health": self.system_health.get_health_status(),
+                "provisioning": self.coordinator.get_provisioning_status(),
+                "tasks": self.task_manager.get_task_status(),
+                "services": self.service_manager.is_running,
+                "timestamp": asyncio.get_event_loop().time(),
             }
         except Exception as e:
             self.logger.error(f"Error getting system status: {e}")
-            return {"error": str(e)}
+            return {"error": str(e), "timestamp": asyncio.get_event_loop().time()}
 
-    async def _start_background_services(self) -> None:
-        """Start background services"""
+    async def _setup_factory_reset_monitoring(self) -> None:
+        """Setup factory reset monitoring as background task"""
+        from ..domain.events import EventType
+
         try:
-            # Start health monitoring
-            self.system_health.start_monitoring()
+            # Subscribe to factory reset events
+            self.event_bus.subscribe(
+                EventType.FACTORY_RESET_TRIGGERED, self._on_factory_reset_triggered
+            )
 
-            # Start factory reset monitoring if available
-            if hasattr(self.factory_reset_service, "start_monitoring"):
-                self.factory_reset_service.start_monitoring(
-                    self._on_factory_reset_triggered
-                )
-
-            self.logger.info("Background services started")
+            # Start factory reset monitoring task with restart policy
+            await self.task_manager.start_task(
+                "factory_reset_monitor",
+                self._monitor_factory_reset,
+                restart_policy="always",  # Always restart if monitoring stops
+                max_restarts=5,
+                restart_delay=10.0,
+                health_check_interval=60.0,  # Check every minute
+            )
 
         except Exception as e:
-            self.logger.error(f"Failed to start background services: {e}")
+            self.logger.error(f"Failed to setup factory reset monitoring: {e}")
 
-    async def _stop_background_services(self) -> None:
-        """Stop background services"""
-        try:
-            # Stop health monitoring
-            self.system_health.stop_monitoring()
+    async def _monitor_factory_reset(self) -> None:
+        """Monitor for factory reset trigger"""
+        while True:
+            try:
+                # Check factory reset trigger
+                if self.factory_reset.check_reset_trigger():
+                    self.logger.info("Factory reset triggered")
+                    await self.factory_reset.perform_reset()
 
-            # Stop factory reset monitoring
-            if hasattr(self.factory_reset_service, "stop_monitoring"):
-                self.factory_reset_service.stop_monitoring()
+                await asyncio.sleep(1)  # Check every second
 
-            self.logger.info("Background services stopped")
-
-        except Exception as e:
-            self.logger.error(f"Error stopping background services: {e}")
-
-    async def _wait_for_owner_setup(self) -> None:
-        """Wait for owner setup to complete"""
-        timeout = self.config.security.owner_setup_timeout
-        elapsed = 0
-
-        while elapsed < timeout and not self.owner_setup.is_owner_registered():
-            await asyncio.sleep(1)
-            elapsed += 1
-
-        if self.owner_setup.is_owner_registered():
-            self.logger.info("Owner setup completed")
-            self.state_machine.process_event(ProvisioningEvent.OWNER_REGISTERED)
-        else:
-            self.logger.warning("Owner setup timed out")
-            self.state_machine.process_event(ProvisioningEvent.TIMEOUT)
-
-    async def _wait_for_provisioning(self) -> None:
-        """Wait for network provisioning to complete"""
-        timeout = self.config.system.provisioning_timeout
-        elapsed = 0
-
-        while (
-            elapsed < timeout
-            and self.state_machine.get_current_state()
-            not in [DeviceState.CONNECTED, DeviceState.ERROR]
-            and self.is_running
-        ):
-            await asyncio.sleep(1)
-            elapsed += 1
-
-        if self.state_machine.get_current_state() == DeviceState.CONNECTED:
-            self.logger.info("Network provisioning completed successfully")
-            self.state_machine.process_event(ProvisioningEvent.PROVISIONING_COMPLETE)
-        elif elapsed >= timeout:
-            self.logger.warning("Network provisioning timed out")
-            self.state_machine.process_event(ProvisioningEvent.TIMEOUT)
+            except asyncio.CancelledError:
+                self.logger.info("Factory reset monitoring cancelled")
+                break
+            except Exception as e:
+                self.logger.error(f"Factory reset monitoring error: {e}")
+                await asyncio.sleep(5)  # Wait before retrying
 
     def _on_factory_reset_triggered(self) -> None:
         """Handle factory reset trigger"""
         try:
-            self.logger.critical("Factory reset triggered")
-            self.state_machine.process_event(ProvisioningEvent.RESET_TRIGGERED)
-
-            # Publish event
-            self.event_bus.publish(
-                EventType.FACTORY_RESET_TRIGGERED,
-                {"triggered_by": "hardware_button"},
-                "orchestrator",
-            )
-
+            self.logger.info("Factory reset event received")
+            asyncio.create_task(self.factory_reset.perform_reset())
         except Exception as e:
             self.logger.error(f"Error handling factory reset: {e}")
-
-    def _signal_handler(self, signum: int, frame) -> None:
-        """Handle shutdown signals"""
-        self.logger.info(f"Received signal {signum}, shutting down gracefully")
-        asyncio.create_task(self.stop())
 
 
 async def main() -> int:
     """Main entry point"""
     try:
         # Load configuration
-        from ..domain.configuration import load_config
+        from ..domain.configuration_factory import ConfigurationFactory
 
-        config = load_config()
+        config_factory = ConfigurationFactory()
+        config = config_factory.load_config()
 
-        # Setup container with services
-        container = Container()
+        # Setup container with services using service registrar
+        from .service_registrars import create_configured_container
 
-        # Register infrastructure services
-        from ..infrastructure import (
-            BluetoothService,
-            ConfigurationService,
-            DeviceInfoProvider,
-            DisplayService,
-            FactoryResetService,
-            HealthMonitorService,
-            LoggingService,
-            NetworkService,
-            OwnershipService,
-            SecurityService,
-        )
-        from ..interfaces import (
-            IBluetoothService,
-            IConfigurationService,
-            IDeviceInfoProvider,
-            IDisplayService,
-            IFactoryResetService,
-            IHealthMonitor,
-            ILogger,
-            INetworkService,
-            IOwnershipService,
-            ISecurityService,
-        )
-
-        # Register services with proper factories
-        container.register_instance(ILogger, LoggingService(config.logging))
-
-        container.register_singleton(
-            IDeviceInfoProvider,
-            DeviceInfoProvider,
-            lambda c: DeviceInfoProvider(c.resolve(ILogger)),
-        )
-
-        container.register_singleton(
-            INetworkService,
-            NetworkService,
-            lambda c: NetworkService(config.network, c.resolve(ILogger)),
-        )
-
-        container.register_singleton(
-            IBluetoothService,
-            BluetoothService,
-            lambda c: BluetoothService(config.ble, c.resolve(ILogger)),
-        )
-
-        container.register_singleton(
-            IDisplayService,
-            DisplayService,
-            lambda c: DisplayService(config.display, c.resolve(ILogger)),
-        )
-
-        container.register_singleton(
-            ISecurityService,
-            SecurityService,
-            lambda c: SecurityService(config.security, c.resolve(ILogger)),
-        )
-
-        container.register_singleton(
-            IConfigurationService,
-            ConfigurationService,
-            lambda c: ConfigurationService(c.resolve(ILogger)),
-        )
-
-        container.register_singleton(
-            IOwnershipService,
-            OwnershipService,
-            lambda c: OwnershipService(config.security, c.resolve(ILogger)),
-        )
-
-        container.register_singleton(
-            IFactoryResetService,
-            FactoryResetService,
-            lambda c: FactoryResetService(
-                config.system.factory_reset_pin, c.resolve(ILogger)
-            ),
-        )
-
-        container.register_singleton(
-            IHealthMonitor,
-            HealthMonitorService,
-            lambda c: HealthMonitorService(
-                config.system.health_check_interval, c.resolve(ILogger)
-            ),
-        )
+        container = create_configured_container(config)
 
         # Create and run orchestrator
         orchestrator = ProvisioningOrchestrator(config, container)
@@ -398,7 +240,7 @@ async def main() -> int:
         if success:
             # Keep running until interrupted
             try:
-                while orchestrator.is_running:
+                while True:
                     await asyncio.sleep(1)
             except KeyboardInterrupt:
                 pass

@@ -1,5 +1,5 @@
 """
-Health monitoring service implementation
+Health monitoring service implementation with consistent error handling using Result pattern
 """
 
 import threading
@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 import psutil
 
+from ..common.result_handling import Result
 from ..domain.errors import ErrorCode, ErrorSeverity, SystemError
 from ..interfaces import IHealthMonitor, ILogger
 
@@ -26,8 +27,8 @@ class HealthMonitorService(IHealthMonitor):
         if self.logger:
             self.logger.info("Health monitor service initialized")
 
-    def check_system_health(self) -> Dict[str, Any]:
-        """Perform system health check"""
+    def check_system_health(self) -> Result[Dict[str, Any], Exception]:
+        """Perform system health check using Result pattern for consistent error handling"""
         try:
             health_info = {
                 "timestamp": time.time(),
@@ -50,23 +51,28 @@ class HealthMonitorService(IHealthMonitor):
             if self.logger:
                 self.logger.debug(f"Health check completed: {health_info['status']}")
 
-            return health_info
+            return Result.success(health_info)
 
         except Exception as e:
+            error_msg = f"Health check failed: {e}"
             if self.logger:
-                self.logger.error(f"Health check failed: {e}")
+                self.logger.error(error_msg)
 
-            error_info = {"timestamp": time.time(), "status": "error", "error": str(e)}
+            return Result.failure(
+                SystemError(
+                    ErrorCode.SYSTEM_ERROR,
+                    error_msg,
+                    ErrorSeverity.MEDIUM,
+                )
+            )
 
-            return error_info
-
-    def start_monitoring(self) -> bool:
-        """Start continuous health monitoring"""
+    def start_monitoring(self) -> Result[bool, Exception]:
+        """Start continuous health monitoring using Result pattern for consistent error handling"""
         try:
             if self.is_monitoring:
                 if self.logger:
                     self.logger.warning("Health monitoring already running")
-                return True
+                return Result.success(True)
 
             self.is_monitoring = True
             self.monitor_thread = threading.Thread(
@@ -79,18 +85,25 @@ class HealthMonitorService(IHealthMonitor):
                     f"Health monitoring started (interval: {self.check_interval}s)"
                 )
 
-            return True
+            return Result.success(True)
 
         except Exception as e:
+            error_msg = f"Failed to start health monitoring: {e}"
             if self.logger:
-                self.logger.error(f"Failed to start health monitoring: {e}")
-            return False
+                self.logger.error(error_msg)
+            return Result.failure(
+                SystemError(
+                    ErrorCode.SYSTEM_ERROR,
+                    error_msg,
+                    ErrorSeverity.MEDIUM,
+                )
+            )
 
-    def stop_monitoring(self) -> bool:
-        """Stop health monitoring"""
+    def stop_monitoring(self) -> Result[bool, Exception]:
+        """Stop health monitoring using Result pattern for consistent error handling"""
         try:
             if not self.is_monitoring:
-                return True
+                return Result.success(True)
 
             self.is_monitoring = False
 
@@ -100,19 +113,34 @@ class HealthMonitorService(IHealthMonitor):
             if self.logger:
                 self.logger.info("Health monitoring stopped")
 
-            return True
+            return Result.success(True)
 
         except Exception as e:
+            error_msg = f"Failed to stop health monitoring: {e}"
             if self.logger:
-                self.logger.error(f"Failed to stop health monitoring: {e}")
-            return False
+                self.logger.error(error_msg)
+            return Result.failure(
+                SystemError(
+                    ErrorCode.SYSTEM_ERROR,
+                    error_msg,
+                    ErrorSeverity.MEDIUM,
+                )
+            )
 
-    def get_health_status(self) -> str:
-        """Get current health status"""
-        if not self.health_data:
-            return "unknown"
+    def get_health_status(self) -> Result[str, Exception]:
+        """Get current health status using Result pattern for consistent error handling"""
+        try:
+            if not self.health_data:
+                return Result.success("unknown")
 
-        return self.health_data.get("status", "unknown")
+            status = self.health_data.get("status", "unknown")
+            return Result.success(status)
+
+        except Exception as e:
+            error_msg = f"Failed to get health status: {e}"
+            if self.logger:
+                self.logger.error(error_msg)
+            return Result.failure(Exception(error_msg))
 
     def _monitor_loop(self):
         """Main monitoring loop"""

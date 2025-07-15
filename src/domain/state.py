@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, Optional
 
-from ..interfaces import DeviceState, ILogger
+from ..interfaces import DeviceState, ILogger, IStateMachine
 from .events import EventBus, EventType
 
 
@@ -38,7 +38,7 @@ class StateTransition:
     action: Optional[Callable[[Any], None]] = None
 
 
-class ProvisioningStateMachine:
+class ProvisioningStateMachine(IStateMachine):
     """State machine for managing provisioning workflow"""
 
     def __init__(self, event_bus: EventBus, logger: Optional[ILogger] = None):

@@ -29,17 +29,21 @@ class NetworkConfig:
     retry_attempts: int = 3
     enable_ethernet: bool = True
     interface_name: str = "wlan0"
+    network_scan_cache_ttl: int = 60  # Cache scan results for 60 seconds
 
 
 @dataclass
 class SecurityConfig:
-    """Security configuration settings"""
+    """Security configuration settings - Encryption is ALWAYS enabled"""
 
-    encryption_enabled: bool = True
+    # SECURITY: encryption_enabled field REMOVED to prevent security bypass
+    # Encryption is now mandatory and cannot be disabled
     session_timeout: int = 900  # 15 minutes
     max_failed_attempts: int = 3
     owner_setup_timeout: int = 300  # 5 minutes
     require_owner_setup: bool = True
+    key_rotation_interval: int = 3600  # Rotate keys every hour
+    max_key_age: int = 86400  # Maximum key age: 24 hours
 
 
 @dataclass
@@ -162,8 +166,8 @@ def load_config(config_path: Optional[str] = None) -> ProvisioningConfig:
                     clean_sec["require_owner_setup"] = sec_data["require_owner_setup"]
                 if "owner_setup_timeout" in sec_data:
                     clean_sec["owner_setup_timeout"] = sec_data["owner_setup_timeout"]
-                if "encryption_algorithm" in sec_data:
-                    clean_sec["encryption_enabled"] = True
+                # SECURITY: Remove encryption_enabled bypass - encryption is always mandatory
+                # No longer setting encryption_enabled from config to prevent security bypass
                 clean_data["security"] = clean_sec
 
             # Copy known sections directly

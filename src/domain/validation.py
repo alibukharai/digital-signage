@@ -5,23 +5,27 @@ Validation services for the provisioning system
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..interfaces import ILogger
+from ..interfaces import ILogger, IValidationService
 from .errors import ErrorCode, ErrorSeverity, ValidationError
 
 
-class ValidationService:
+class ValidationService(IValidationService):
     """Central validation service for all domain objects"""
 
     def __init__(self, logger: Optional[ILogger] = None):
         self.logger = logger
 
     def validate_wifi_credentials(
-        self, ssid: str, password: str
+        self,
+        ssid: str,
+        password: str,
+        security_type: str = "WPA2",
+        enterprise: Optional[Dict[str, str]] = None,
     ) -> Tuple[bool, List[str]]:
-        """Validate WiFi credentials"""
+        """Validate WiFi credentials with enhanced security checks"""
         errors = []
 
-        # SSID validation
+        # SSID validation with enhanced security checks
         if not ssid or not ssid.strip():
             errors.append("SSID cannot be empty")
         elif len(ssid) > 32:
@@ -29,11 +33,52 @@ class ValidationService:
         elif len(ssid) < 1:
             errors.append("SSID must be at least 1 character")
 
-        # Check for invalid SSID characters
-        if re.search(r"[^\x20-\x7E]", ssid):
-            errors.append("SSID contains invalid characters")
+        # Enhanced SSID security validation
+        if ssid:
+            # Check for control characters that could cause injection issues
+            if re.search(r"[\x00-\x1F\x7F]", ssid):
+                errors.append("SSID contains control characters")
 
-        # Password validation
+            # Check for SQL injection patterns
+            sql_patterns = [
+                r"['\"`;]",  # SQL injection quotes and terminators
+                r"\b(union|select|insert|update|delete|drop|exec)\b",  # SQL keywords
+                r"--\s*",  # SQL comments
+                r"/\*.*\*/",  # SQL block comments
+            ]
+            for pattern in sql_patterns:
+                if re.search(pattern, ssid, re.IGNORECASE):
+                    errors.append("SSID contains potentially dangerous SQL patterns")
+                    break
+
+            # Check for shell injection patterns
+            shell_patterns = [
+                r"[;&|`$()]",  # Shell metacharacters
+                r"\$\(",  # Command substitution
+                r"`.*`",  # Backtick command substitution
+                r"\\x[0-9a-fA-F]{2}",  # Hex escape sequences
+            ]
+            for pattern in shell_patterns:
+                if re.search(pattern, ssid):
+                    errors.append(
+                        "SSID contains potentially dangerous shell characters"
+                    )
+                    break
+
+            # Check for network configuration injection patterns
+            network_patterns = [
+                r"\n|\r",  # Line breaks that could break config files
+                r"\\[nr]",  # Escaped line breaks
+                r"#.*config",  # Configuration directives
+            ]
+            for pattern in network_patterns:
+                if re.search(pattern, ssid, re.IGNORECASE):
+                    errors.append(
+                        "SSID contains network configuration injection patterns"
+                    )
+                    break
+
+        # Password validation with enhanced security
         if not password:
             errors.append("Password cannot be empty")
         elif len(password) < 8:
@@ -41,10 +86,100 @@ class ValidationService:
         elif len(password) > 64:
             errors.append("Password must be 64 characters or less")
 
-        # Check for common weak passwords
-        weak_passwords = ["password", "12345678", "admin123", "password123"]
-        if password.lower() in weak_passwords:
-            errors.append("Password is too weak")
+        # Enhanced password security validation
+        if password:
+            # Check for common weak passwords (expanded list)
+            weak_passwords = [
+                "password",
+                "12345678",
+                "admin123",
+                "password123",
+                "qwerty123",
+                "letmein",
+                "welcome",
+                "monkey123",
+                "dragon123",
+                "master123",
+                "shadow123",
+                "abc12345",
+                "password1",
+                "123456789",
+                "iloveyou",
+            ]
+            if password.lower() in weak_passwords:
+                errors.append("Password is too weak - commonly used password")
+
+            # Check for password injection patterns
+            if re.search(r"['\";\\]", password):
+                errors.append("Password contains potentially dangerous characters")
+
+            # Check password complexity
+            complexity_score = 0
+            if re.search(r"[a-z]", password):
+                complexity_score += 1
+            if re.search(r"[A-Z]", password):
+                complexity_score += 1
+            if re.search(r"[0-9]", password):
+                complexity_score += 1
+            if re.search(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?~]", password):
+                complexity_score += 1
+
+            if complexity_score < 3 and len(password) < 12:
+                errors.append(
+                    "Password should contain at least 3 different character types (uppercase, lowercase, numbers, symbols) or be at least 12 characters long"
+                )
+
+        # Security type validation
+        valid_security_types = [
+            "WPA2",
+            "WPA3",
+            "WEP",
+            "OPEN",
+            "WPA2-Enterprise",
+            "WPA3-Enterprise",
+        ]
+        if security_type not in valid_security_types:
+            errors.append(
+                f"Invalid security type. Must be one of: {', '.join(valid_security_types)}"
+            )
+
+        # Enterprise WiFi validation
+        if security_type in ["WPA2-Enterprise", "WPA3-Enterprise"]:
+            if not enterprise:
+                errors.append(
+                    "Enterprise configuration required for WPA2/WPA3-Enterprise"
+                )
+            else:
+                # Validate enterprise fields
+                if not enterprise.get("identity"):
+                    errors.append("Enterprise identity is required")
+                elif len(enterprise["identity"]) > 128:
+                    errors.append("Enterprise identity must be 128 characters or less")
+
+                # Check for injection in identity
+                if enterprise.get("identity") and re.search(
+                    r"['\";\\]", enterprise["identity"]
+                ):
+                    errors.append(
+                        "Enterprise identity contains potentially dangerous characters"
+                    )
+
+                # Certificate validation (basic checks)
+                if enterprise.get("ca_cert"):
+                    if not enterprise["ca_cert"].startswith(
+                        "-----BEGIN CERTIFICATE-----"
+                    ):
+                        errors.append("CA certificate appears to be invalid format")
+
+                if enterprise.get("client_cert"):
+                    if not enterprise["client_cert"].startswith(
+                        "-----BEGIN CERTIFICATE-----"
+                    ):
+                        errors.append("Client certificate appears to be invalid format")
+
+                if enterprise.get("private_key"):
+                    if not enterprise["private_key"].startswith("-----BEGIN"):
+                        errors.append("Private key appears to be invalid format")
 
         is_valid = len(errors) == 0
 
@@ -232,3 +367,43 @@ class ValidationService:
             self.logger.warning(f"MAC address validation failed: {errors}")
 
         return is_valid, errors
+
+    def validate_ssid(self, ssid: str) -> bool:
+        """Validate network SSID"""
+        is_valid, _ = self.validate_wifi_credentials(ssid, "dummy_password")
+        # We only care about SSID validation here
+        errors = []
+
+        if not ssid or not ssid.strip():
+            return False
+        elif len(ssid) > 32:
+            return False
+        elif len(ssid) < 1:
+            return False
+
+        # Check for invalid SSID characters
+        if re.search(r"[^\x20-\x7E]", ssid):
+            return False
+
+        return True
+
+    def validate_password(self, password: str) -> bool:
+        """Validate network password"""
+        if not password:
+            return False
+        elif len(password) < 8:
+            return False
+        elif len(password) > 64:
+            return False
+
+        # Check for common weak passwords
+        weak_passwords = ["password", "12345678", "admin123", "password123"]
+        if password.lower() in weak_passwords:
+            return False
+
+        return True
+
+    def validate_credentials(self, ssid: str, password: str) -> bool:
+        """Validate complete network credentials"""
+        is_valid, _ = self.validate_wifi_credentials(ssid, password)
+        return is_valid

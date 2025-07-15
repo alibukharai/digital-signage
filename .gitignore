@@ -167,6 +167,14 @@ cython_debug/
 logs/*.log
 logs/rockpi-provisioning.log
 
+# All log files (comprehensive patterns)
+*.log
+*.log.*
+logs/
+log/
+*.out
+*.err
+
 # Hardware-specific config files (may contain sensitive data)
 config/device_*.json
 config/network_*.json

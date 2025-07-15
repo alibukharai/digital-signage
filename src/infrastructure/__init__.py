@@ -4,7 +4,7 @@ This layer contains concrete implementations of interfaces and handles external 
 """
 
 from .bluetooth import BluetoothService
-from .configuration import ConfigurationService
+from .configuration_service import LocalConfigurationService as ConfigurationService
 from .device import DeviceInfoProvider
 from .display import DisplayService
 from .factory_reset import FactoryResetService

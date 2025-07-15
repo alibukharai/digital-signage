@@ -1,5 +1,5 @@
 """
-Ownership service implementation
+Ownership service implementation with consistent error handling using Result pattern
 """
 
 import hashlib
@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from ..common.result_handling import Result
 from ..domain.configuration import SecurityConfig
 from ..domain.errors import ErrorCode, ErrorSeverity, SecurityError
 from ..interfaces import ILogger, IOwnershipService
@@ -74,12 +75,18 @@ class OwnershipService(IOwnershipService):
                 self.logger.error(f"Error checking owner registration: {e}")
             return False
 
-    def register_owner(self, pin: str, name: str) -> Tuple[bool, str]:
-        """Register device owner"""
+    def register_owner(self, pin: str, name: str) -> Result[bool, Exception]:
+        """Register device owner using Result pattern for consistent error handling"""
         try:
             # Check if setup mode is active
             if not self.setup_mode_active:
-                return False, "Setup mode not active"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        "Setup mode not active",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
             # Check setup timeout
             if (
@@ -88,19 +95,43 @@ class OwnershipService(IOwnershipService):
                 > self.config.owner_setup_timeout
             ):
                 self.setup_mode_active = False
-                return False, "Setup mode timed out"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        "Setup mode timed out",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
             # Validate PIN
             if not self._validate_pin(pin):
-                return False, "Invalid PIN format"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        "Invalid PIN format",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
             # Validate name
             if not name or len(name.strip()) < 2:
-                return False, "Invalid owner name"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        "Invalid owner name",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
             # Check if owner already registered
             if self.is_owner_registered():
-                return False, "Owner already registered"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        "Owner already registered",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
             # Hash the PIN
             pin_hash = self._hash_pin(pin)
@@ -134,7 +165,13 @@ class OwnershipService(IOwnershipService):
                     continue
 
             if not saved:
-                return False, "Failed to save owner data"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.CONFIG_WRITE_FAILED,
+                        "Failed to save owner data",
+                        ErrorSeverity.HIGH,
+                    )
+                )
 
             # Clear setup mode
             self.setup_mode_active = False
@@ -143,52 +180,95 @@ class OwnershipService(IOwnershipService):
             if self.logger:
                 self.logger.info(f"Owner '{name}' registered successfully")
 
-            return True, "Owner registered successfully"
+            return Result.success(True)
 
         except Exception as e:
+            error_msg = f"Registration failed: {str(e)}"
             if self.logger:
                 self.logger.error(f"Owner registration failed: {e}")
-            return False, f"Registration failed: {str(e)}"
+            return Result.failure(
+                SecurityError(
+                    ErrorCode.AUTHENTICATION_FAILED,
+                    error_msg,
+                    ErrorSeverity.HIGH,
+                )
+            )
 
-    def authenticate_owner(self, pin: str) -> Tuple[bool, str]:
-        """Authenticate owner"""
+    def authenticate_owner(self, pin: str) -> Result[bool, Exception]:
+        """Authenticate owner using Result pattern for consistent error handling"""
         try:
             if not self.is_owner_registered():
-                return False, "No owner registered"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        "No owner registered",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
             # Load owner data
             owner_data = self._load_owner_data()
             if not owner_data:
-                return False, "Could not load owner data"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.CONFIG_READ_FAILED,
+                        "Could not load owner data",
+                        ErrorSeverity.HIGH,
+                    )
+                )
 
             # Verify PIN
             stored_hash = owner_data.get("pin_hash")
             if not stored_hash:
-                return False, "Invalid owner data"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.CONFIG_READ_FAILED,
+                        "Invalid owner data",
+                        ErrorSeverity.HIGH,
+                    )
+                )
 
             if self._verify_pin(pin, stored_hash):
                 if self.logger:
                     self.logger.info("Owner authentication successful")
-                return True, "Authentication successful"
+                return Result.success(True)
             else:
                 if self.logger:
                     self.logger.warning("Owner authentication failed")
-                return False, "Invalid PIN"
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        "Invalid PIN",
+                        ErrorSeverity.MEDIUM,
+                    )
+                )
 
         except Exception as e:
+            error_msg = f"Authentication error: {str(e)}"
             if self.logger:
                 self.logger.error(f"Owner authentication error: {e}")
-            return False, f"Authentication error: {str(e)}"
+            return Result.failure(
+                SecurityError(
+                    ErrorCode.AUTHENTICATION_FAILED,
+                    error_msg,
+                    ErrorSeverity.HIGH,
+                )
+            )
 
-    def start_setup_mode(self) -> bool:
-        """Start owner setup mode"""
+    def start_setup_mode(self) -> Result[bool, Exception]:
+        """Start owner setup mode using Result pattern for consistent error handling"""
         try:
             if self.is_owner_registered():
+                error_msg = "Cannot start setup mode - owner already registered"
                 if self.logger:
-                    self.logger.warning(
-                        "Cannot start setup mode - owner already registered"
+                    self.logger.warning(error_msg)
+                return Result.failure(
+                    SecurityError(
+                        ErrorCode.AUTHENTICATION_FAILED,
+                        error_msg,
+                        ErrorSeverity.MEDIUM,
                     )
-                return False
+                )
 
             self.setup_mode_active = True
             self.setup_start_time = time.time()
@@ -200,12 +280,19 @@ class OwnershipService(IOwnershipService):
                 )
                 self.logger.info(f"Setup token: {self.setup_token}")
 
-            return True
+            return Result.success(True)
 
         except Exception as e:
+            error_msg = f"Failed to start setup mode: {str(e)}"
             if self.logger:
-                self.logger.error(f"Failed to start setup mode: {e}")
-            return False
+                self.logger.error(error_msg)
+            return Result.failure(
+                SecurityError(
+                    ErrorCode.SYSTEM_ERROR,
+                    error_msg,
+                    ErrorSeverity.MEDIUM,
+                )
+            )
 
     def get_setup_info(self) -> Dict[str, Any]:
         """Get setup mode information"""
