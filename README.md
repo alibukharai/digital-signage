@@ -13,7 +13,7 @@ The system follows **Clean Architecture** principles with clear separation of co
 ```
 📁 src/
 ├── 🔌 interfaces/      - Pure abstractions (contracts)
-├── 🧠 domain/          - Business logic and rules  
+├── 🧠 domain/          - Business logic and rules
 ├── 🏗️ infrastructure/  - External dependencies & implementations
 └── 📱 application/     - Use cases and orchestration
 ```
@@ -90,7 +90,7 @@ make dev
 ## 📋 System Requirements
 
 - **Hardware**: Rock Pi 3399 or compatible SBC
-- **OS**: Linux (Ubuntu 20.04+ recommended)  
+- **OS**: Linux (Ubuntu 20.04+ recommended)
 - **Python**: 3.8 or higher
 - **Bluetooth**: BLE-capable adapter
 - **Display**: HDMI output for QR code display
@@ -179,7 +179,7 @@ make check         # Run all checks (lint + test)
 # System management
 make status        # Show system status
 make logs          # Show system logs
-make requirements  # Update requirements.txt
+make deps         # Install dependencies from pyproject.toml
 ```
 
 ### SystemD Service
@@ -207,7 +207,7 @@ journalctl -u rock-provisioning -f
 ├── 📄 README.md                    # This file
 ├── 📄 Makefile                     # Build and development tasks
 ├── 📄 install.sh                   # System installation script
-├── 📄 requirements.txt             # Python dependencies
+├── 📄 pyproject.toml             # Modern Python project config & dependencies
 ├── 📄 setup.py                     # Package setup
 ├── 📁 config/                      # Configuration files
 │   └── unified_config.json
@@ -342,3 +342,71 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 **Made with ❤️ for the Rock Pi community**
+
+## 🚀 Development & CI/CD
+
+### **GitHub Actions Optimized for Free Tier**
+
+This project includes a sophisticated CI/CD pipeline optimized for GitHub Actions free tier usage:
+
+#### **🔄 Workflow Overview**
+
+| Workflow | Trigger | Duration | Purpose |
+|----------|---------|-----------|---------|
+| **🔍 PR Validation** | Pull Request | ~3-5 min | Fast feedback, code quality |
+| **🚀 Optimized CI** | Push to main/develop | ~8-15 min | Standard tests + hardware validation |
+| **🌙 Monthly Tests** | 1st of month | ~60-90 min | Comprehensive regression testing |
+
+#### **💰 Cost Optimization Features**
+
+- **Smart Change Detection**: Skips workflows for docs-only changes
+- **Conditional Execution**: Hardware tests only on main branch or manual trigger
+- **Efficient Caching**: Python dependencies cached across runs
+- **Concurrency Control**: Cancels previous runs to save minutes
+- **Self-hosted Runner**: Rock Pi 3399 handles heavy hardware testing
+
+#### **🎣 Pre-commit Hooks**
+
+Catch issues early to prevent failed CI runs:
+
+```bash
+# One-time setup
+./setup-dev.sh
+
+# Manual checks
+pre-commit run --all-files
+
+# Auto-runs on every commit
+git commit -m "Your changes"
+```
+
+**Pre-commit checks include:**
+- Code formatting (Black)
+- Import sorting (isort)
+- Linting (Flake8)
+- Security scanning (Bandit)
+- Type checking (MyPy)
+
+#### **🔧 Self-hosted Runner Setup**
+
+For Rock Pi 3399 hardware testing:
+
+1. **Follow the setup guide**: `.github/SETUP_CI_CD.md`
+2. **Configure your Rock Pi as a GitHub runner**
+3. **Hardware tests run automatically on main branch**
+
+#### **📊 Estimated GitHub Actions Usage**
+
+**For Private Repositories (2,000 min/month free):**
+
+| Scenario | Monthly Usage | Status |
+|----------|---------------|---------|
+| **10 PRs + 20 pushes** | ~400 minutes | ✅ Well within limits |
+| **Active development** | ~800 minutes | ✅ Comfortable usage |
+| **Heavy usage** | ~1,200 minutes | ⚠️ Monitor usage |
+
+**💡 Tips to minimize usage:**
+- Use draft PRs while developing
+- Only push to main when ready
+- Leverage self-hosted runner for hardware tests
+- Use manual workflow dispatch for full testing

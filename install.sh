@@ -41,7 +41,7 @@ pip install --upgrade pip
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
-pip install -r requirements.txt
+pip install -e .
 
 # Create systemd service file
 echo "Creating systemd service..."

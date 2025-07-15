@@ -1,0 +1,196 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rock-pi-3399-provisioning"
+version = "1.0.0"
+description = "Rock Pi 3399 Digital Signage Provisioning System"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Rock Pi 3399 Team"},
+]
+keywords = ["rock-pi", "provisioning", "digital-signage", "bluetooth", "ble"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: System :: Hardware",
+    "Topic :: Communications",
+]
+
+# Production dependencies
+dependencies = [
+    # Core BLE dependencies
+    "bleak==0.21.1",
+    "bluepy==1.3.0",
+    
+    # Cryptography and security
+    "cryptography==41.0.8",
+    "cffi==1.16.0",
+    
+    # QR code generation
+    "qrcode==7.4.2",
+    "Pillow==10.1.0",
+    
+    # Display and computer vision
+    "opencv-python-headless==4.8.1.78",
+    "numpy==1.24.4",
+    
+    # System utilities and monitoring
+    "psutil==5.9.6",
+    
+    # Async communication
+    "asyncio-mqtt==0.16.1",
+    "paho-mqtt==1.6.1",
+    
+    # Configuration management
+    "pydantic==2.5.2",
+    "pydantic-settings==2.1.0",
+    "pydantic-core==2.14.5",
+    
+    # Logging
+    "loguru==0.7.2",
+    
+    # Core dependencies
+    "typing-extensions==4.8.0",
+    "annotated-types==0.6.0",
+]
+
+# Optional dependencies for development
+[project.optional-dependencies]
+dev = [
+    # Code quality and formatting
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "bandit>=1.7.0",
+    "pre-commit>=3.0.0",
+    
+    # Core testing framework
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.10.0",
+    
+    # Coverage reporting
+    "pytest-cov>=4.0.0",
+    "coverage>=7.0.0",
+    
+    # Performance testing
+    "pytest-benchmark>=4.0.0",
+    "pytest-timeout>=2.1.0",
+    
+    # Test utilities
+    "pytest-xdist>=3.0.0",
+    "pytest-html>=3.1.0",
+    "pytest-json-report>=1.5.0",
+    
+    # Mock and testing utilities
+    "responses>=0.23.0",
+    "factory-boy>=3.2.0",
+    "faker>=18.0.0",
+    
+    # Development and debugging
+    "pytest-sugar>=0.9.0",
+    "pytest-clarity>=1.0.0",
+    "pytest-picked>=0.4.0",
+    
+    # Test data and fixtures
+    "pytest-factoryboy>=2.5.0",
+    "pytest-lazy-fixture>=0.6.0",
+    
+    # System testing utilities
+    "pexpect>=4.8.0",
+]
+
+[project.scripts]
+rock-pi-provision = "src.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/rock-pi-3399-provisioning"
+Repository = "https://github.com/your-org/rock-pi-3399-provisioning.git"
+Issues = "https://github.com/your-org/rock-pi-3399-provisioning/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# Rock Pi 3399 Provisioning System - pytest configuration
+minversion = "6.0"
+addopts = [
+    "-ra",  # Show summary of all test results
+    "-q",   # Quiet mode
+    "--strict-markers",  # Enforce marker registration
+    "--strict-config",   # Enforce configuration validation
+    "--tb=short",        # Short traceback format
+    "--durations=10",    # Show 10 slowest tests
+    "--cov=src",               # Coverage reporting
+    "--cov-report=html:htmlcov",
+    "--cov-report=term-missing", 
+    "--cov-report=xml",
+    "--cov-fail-under=80",
+]
+
+# Test discovery
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Markers for test categorization
+markers = [
+    "first_time_setup: First-time setup core tests (F1-F3)",
+    "normal_operation: Normal operation tests (N1-N2)", 
+    "factory_reset: Factory reset tests (R1-R2)",
+    "error_recovery: Error recovery tests (E1-E2)",
+    "security_validation: Security validation tests (S1-S2)",
+    "integration: Integration tests requiring full system",
+    "performance: Performance and timing tests",
+    "slow: Tests that take significant time to run",
+    "hardware: Tests requiring actual hardware components",
+    "network: Tests requiring network connectivity",
+    "bluetooth: Tests requiring Bluetooth functionality",
+    "display: Tests requiring display hardware",
+    "gpio: Tests requiring GPIO hardware",
+    "critical: Critical functionality tests that must pass",
+    "regression: Regression tests for known issues",
+]
+
+# Asyncio configuration
+asyncio_mode = "auto"
+
+# Logging configuration for tests
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(name)s: %(message)s"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
+
+# Coverage reporting (if pytest-cov is installed)
+# NOTE: Coverage options are included in main addopts above
+
+# Timeout configuration (if pytest-timeout is installed)
+timeout = 300  # 5 minutes per test
+timeout_method = "thread"
+
+# Warnings configuration
+filterwarnings = [
+    "error",  # Turn warnings into errors
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+# Test directories and patterns
+collect_ignore = [
+    "setup.py",
+    "build",
+    "dist",
+]

@@ -2,15 +2,16 @@
 Dependency injection container for the application layer
 """
 
-from typing import TypeVar, Type, Optional, Callable, Dict, Any, Union
-from threading import Lock
 import weakref
+from threading import Lock
+from typing import Any, Callable, Dict, Optional, Type, TypeVar, Union
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class ServiceLifetime:
     """Service lifetime constants"""
+
     SINGLETON = "singleton"
     TRANSIENT = "transient"
     SCOPED = "scoped"
@@ -18,14 +19,14 @@ class ServiceLifetime:
 
 class ServiceDescriptor:
     """Describes how a service should be created"""
-    
+
     def __init__(
         self,
         service_type: Type[T],
         implementation_type: Optional[Type[T]] = None,
-        factory: Optional[Callable[['Container'], T]] = None,
+        factory: Optional[Callable[["Container"], T]] = None,
         instance: Optional[T] = None,
-        lifetime: str = ServiceLifetime.SINGLETON
+        lifetime: str = ServiceLifetime.SINGLETON,
     ):
         self.service_type = service_type
         self.implementation_type = implementation_type
@@ -36,95 +37,95 @@ class ServiceDescriptor:
 
 class Container:
     """Dependency injection container"""
-    
+
     def __init__(self):
         self._services: Dict[Type, ServiceDescriptor] = {}
         self._singletons: Dict[Type, Any] = {}
         self._lock = Lock()
-    
+
     def register_singleton(
         self,
         service_type: Type[T],
         implementation_type: Optional[Type[T]] = None,
-        factory: Optional[Callable[['Container'], T]] = None
-    ) -> 'Container':
+        factory: Optional[Callable[["Container"], T]] = None,
+    ) -> "Container":
         """Register a service as singleton"""
         with self._lock:
             descriptor = ServiceDescriptor(
                 service_type=service_type,
                 implementation_type=implementation_type,
                 factory=factory,
-                lifetime=ServiceLifetime.SINGLETON
+                lifetime=ServiceLifetime.SINGLETON,
             )
             self._services[service_type] = descriptor
         return self
-    
+
     def register_transient(
         self,
         service_type: Type[T],
         implementation_type: Optional[Type[T]] = None,
-        factory: Optional[Callable[['Container'], T]] = None
-    ) -> 'Container':
+        factory: Optional[Callable[["Container"], T]] = None,
+    ) -> "Container":
         """Register a service as transient"""
         with self._lock:
             descriptor = ServiceDescriptor(
                 service_type=service_type,
                 implementation_type=implementation_type,
                 factory=factory,
-                lifetime=ServiceLifetime.TRANSIENT
+                lifetime=ServiceLifetime.TRANSIENT,
             )
             self._services[service_type] = descriptor
         return self
-    
-    def register_instance(self, service_type: Type[T], instance: T) -> 'Container':
+
+    def register_instance(self, service_type: Type[T], instance: T) -> "Container":
         """Register an existing instance"""
         with self._lock:
             descriptor = ServiceDescriptor(
                 service_type=service_type,
                 instance=instance,
-                lifetime=ServiceLifetime.SINGLETON
+                lifetime=ServiceLifetime.SINGLETON,
             )
             self._services[service_type] = descriptor
             self._singletons[service_type] = instance
         return self
-    
+
     def resolve(self, service_type: Type[T]) -> T:
         """Resolve a service"""
         if service_type not in self._services:
             raise ValueError(f"Service {service_type.__name__} is not registered")
-        
+
         descriptor = self._services[service_type]
-        
+
         # Return existing instance if available
         if descriptor.instance is not None:
             return descriptor.instance
-        
+
         # Check singleton cache
         if descriptor.lifetime == ServiceLifetime.SINGLETON:
             if service_type in self._singletons:
                 return self._singletons[service_type]
-        
+
         # Create new instance
         instance = self._create_instance(descriptor)
-        
+
         # Cache singleton
         if descriptor.lifetime == ServiceLifetime.SINGLETON:
             with self._lock:
                 self._singletons[service_type] = instance
-        
+
         return instance
-    
+
     def try_resolve(self, service_type: Type[T]) -> Optional[T]:
         """Try to resolve a service, return None if not found"""
         try:
             return self.resolve(service_type)
         except ValueError:
             return None
-    
+
     def is_registered(self, service_type: Type) -> bool:
         """Check if a service is registered"""
         return service_type in self._services
-    
+
     def _create_instance(self, descriptor: ServiceDescriptor) -> Any:
         """Create an instance from descriptor"""
         if descriptor.factory:
@@ -133,9 +134,10 @@ class Container:
             # Try to inject dependencies if constructor needs them
             try:
                 import inspect
+
                 sig = inspect.signature(descriptor.implementation_type.__init__)
                 params = list(sig.parameters.values())[1:]  # Skip 'self'
-                
+
                 if params:
                     # Try to resolve dependencies
                     args = []
@@ -158,7 +160,7 @@ class Container:
                 return descriptor.implementation_type()
         else:
             return descriptor.service_type()
-    
+
     def clear(self) -> None:
         """Clear all registrations"""
         with self._lock:

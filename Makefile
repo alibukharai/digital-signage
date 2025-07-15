@@ -31,7 +31,7 @@ help:
 	@echo "  check       - Run all checks (lint + test)"
 	@echo "  status      - Show system status"
 	@echo "  logs        - Show system logs"
-	@echo "  requirements - Update requirements.txt"
+	@echo "  deps       - Install dependencies from pyproject.toml"
 
 # Install system dependencies and setup environment
 install:
@@ -156,12 +156,13 @@ logs:
 	@echo "System service logs:"
 	@journalctl -u $(SERVICE_NAME) --no-pager -n 20 2>/dev/null || echo "Service not found in journalctl"
 
-# Update requirements.txt from current environment
-requirements:
-	@echo "📦 Updating requirements.txt..."
+# Install dependencies from pyproject.toml
+deps:
+	@echo "📦 Installing dependencies from pyproject.toml..."
 	@if [ -f "$(VENV_PATH)/bin/python" ]; then \
-		$(PIP) freeze > requirements.txt; \
-		echo "✅ Requirements updated!"; \
+		$(PIP) install -e ".[dev]"; \
+		echo "✅ Dependencies installed successfully"; \
 	else \
-		echo "⚠️  Virtual environment not found, cannot update requirements"; \
+		echo "⚠️  Virtual environment not found, installing globally"; \
+		pip install -e ".[dev]"; \
 	fi

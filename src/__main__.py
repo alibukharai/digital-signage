@@ -3,8 +3,9 @@
 Rock Pi 3399 Provisioning System Entry Point
 """
 
-import sys
 import asyncio
+import sys
+
 from .application.provisioning_orchestrator import main
 
 if __name__ == "__main__":

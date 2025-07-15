@@ -1,0 +1,171 @@
+name: 🌙 Monthly Comprehensive Tests
+
+# Run comprehensive tests monthly instead of nightly to save GitHub Actions minutes
+# Use self-hosted runner for heavy testing
+
+on:
+  schedule:
+    # Run on the 1st of every month at 2 AM UTC
+    - cron: '0 2 1 * *'
+  workflow_dispatch:
+    inputs:
+      test_scope:
+        description: 'Scope of comprehensive tests'
+        required: true
+        default: 'regression'
+        type: choice
+        options:
+          - regression     # Full regression suite
+          - performance    # Performance focus
+          - security       # Security focus
+          - compatibility  # Hardware compatibility
+
+env:
+  PYTHON_VERSION: '3.9'
+  ROCKPI_TEST_LOG_LEVEL: "DEBUG"
+
+jobs:
+  comprehensive-tests:
+    name: 🌙 Monthly Comprehensive Testing
+    runs-on: [self-hosted, rock-pi-3399]
+    timeout-minutes: 90
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+    
+    - name: 🌙 Monthly Test Setup
+      run: |
+        echo "🌙 Starting monthly comprehensive test suite..."
+        echo "Date: $(date)"
+        echo "Scope: ${{ github.event.inputs.test_scope || 'regression' }}"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Commit: ${{ github.sha }}"
+    
+    - name: 🔧 Comprehensive System Health Check
+      run: |
+        echo "🔧 Detailed system health assessment..."
+        
+        # System resources
+        echo "=== System Resources ==="
+        echo "Memory: $(free -h | grep Mem | awk '{print $3 "/" $2}')"
+        echo "Disk: $(df -h / | tail -1 | awk '{print $3 "/" $2}')"
+        echo "CPU Load: $(uptime | awk '{print $10 $11 $12}')"
+        echo "Temperature: $(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{print $1/1000 "°C"}' || echo 'N/A')"
+        
+        # Hardware interfaces
+        echo "=== Hardware Interfaces ==="
+        echo "GPIO: $([ -d '/sys/class/gpio' ] && echo 'Available' || echo 'Not available')"
+        echo "Bluetooth: $(bluetoothctl --version 2>/dev/null || echo 'Not available')"
+        echo "WiFi: $(iwconfig 2>/dev/null | grep -q '802.11' && echo 'Available' || echo 'Not available')"
+        
+        # Python environment
+        echo "=== Python Environment ==="
+        echo "Python: $(python3 --version)"
+        echo "Pip packages: $(pip3 list | wc -l) installed"
+    
+    - name: 🐍 Setup Environment
+      run: |
+        python3 -m pip install --upgrade pip
+        pip3 install -e ".[dev]"
+    
+    - name: 🧪 Regression Tests
+      if: github.event.inputs.test_scope == 'regression' || github.event.inputs.test_scope == ''
+      run: |
+        echo "🧪 Running full regression test suite..."
+        python run_tests.py --category all --verbose --coverage --report monthly-regression-report.md
+    
+    - name: ⚡ Performance Tests
+      if: github.event.inputs.test_scope == 'performance' || github.event.inputs.test_scope == 'regression'
+      run: |
+        echo "⚡ Running performance benchmarks..."
+        python run_tests.py --performance --verbose --report monthly-performance-report.md
+    
+    - name: 🔒 Security Tests
+      if: github.event.inputs.test_scope == 'security' || github.event.inputs.test_scope == 'regression'
+      run: |
+        echo "🔒 Running comprehensive security tests..."
+        python run_tests.py --category security_validation --verbose --report monthly-security-report.md
+    
+    - name: 🔧 Hardware Compatibility Tests
+      if: github.event.inputs.test_scope == 'compatibility' || github.event.inputs.test_scope == 'regression'
+      run: |
+        echo "🔧 Running hardware compatibility tests..."
+        
+        # Test all hardware interfaces
+        python run_tests.py --category hardware_compatibility --verbose --report monthly-compatibility-report.md || echo "Some compatibility tests failed"
+    
+    - name: 📊 Generate Monthly Report
+      if: always()
+      run: |
+        echo "📊 Generating comprehensive monthly report..."
+        
+        # Create detailed monthly report
+        cat > monthly-comprehensive-report.md << 'EOF'
+        # 🌙 Monthly Comprehensive Test Report
+        
+        **Test Date:** $(date)
+        **Commit:** ${{ github.sha }}
+        **Branch:** ${{ github.ref_name }}
+        **Test Scope:** ${{ github.event.inputs.test_scope || 'regression' }}
+        
+        ## 🔧 System Information
+        - **Hardware:** $(cat /proc/device-tree/model 2>/dev/null || echo 'Unknown')
+        - **OS:** $(cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2 | tr -d '"')
+        - **Kernel:** $(uname -r)
+        - **Python:** $(python3 --version)
+        - **Memory:** $(free -h | grep Mem | awk '{print $3 "/" $2}')
+        - **Storage:** $(df -h / | tail -1 | awk '{print $4}') available
+        
+        ## 📊 Test Results Summary
+        
+        EOF
+        
+        # Append individual reports if they exist
+        for report in monthly-*-report.md; do
+          if [ -f "$report" ]; then
+            echo "### $(basename $report .md)" >> monthly-comprehensive-report.md
+            echo '```' >> monthly-comprehensive-report.md
+            cat "$report" >> monthly-comprehensive-report.md
+            echo '```' >> monthly-comprehensive-report.md
+            echo "" >> monthly-comprehensive-report.md
+          fi
+        done
+        
+        # Add recommendations
+        echo "## 💡 Recommendations" >> monthly-comprehensive-report.md
+        echo "- Review any failed tests and create issues" >> monthly-comprehensive-report.md
+        echo "- Update dependencies if security issues found" >> monthly-comprehensive-report.md
+        echo "- Consider hardware upgrades if performance degraded" >> monthly-comprehensive-report.md
+    
+    - name: 📊 Upload Monthly Reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: monthly-comprehensive-reports-$(date +%Y-%m)
+        path: |
+          monthly-*.md
+          htmlcov/
+        retention-days: 90  # Keep monthly reports longer
+    
+    - name: 🧹 Monthly Cleanup
+      if: always()
+      run: |
+        echo "🧹 Performing monthly system cleanup..."
+        
+        # Clean up test artifacts
+        rm -f /tmp/rockpi_test_*.json
+        rm -f /tmp/test_*.log
+        
+        # Clean up old log files (older than 30 days)
+        find /tmp -name "test_*.log" -mtime +30 -delete 2>/dev/null || true
+        
+        # Reset services for clean state
+        sudo systemctl restart bluetooth || true
+        
+        echo "✅ Monthly cleanup completed"
+
+# Monthly workflow specific settings
+concurrency:
+  group: monthly-tests
+  cancel-in-progress: false  # Don't cancel monthly tests
