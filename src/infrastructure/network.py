@@ -72,16 +72,168 @@ class NetworkCache:
 
 
 class NetworkService(INetworkService):
-    """Concrete implementation of network service with full async support"""
+    """Enhanced network service with OP1 optimizations for ROCK Pi 4B+"""
 
     def __init__(self, config: NetworkConfig, logger: Optional[ILogger] = None):
         self.config = config
         self.logger = logger
-        self.current_connection: Optional[ConnectionInfo] = None
-        self.cache = NetworkCache(config.network_scan_cache_ttl)
+        self.cache = NetworkCache(cache_ttl_seconds=30)
+        self.performance_metrics: List[PerformanceMetrics] = []
+        self._connection_status = ConnectionStatus.DISCONNECTED
+        self._current_connection: Optional[ConnectionInfo] = None
+
+        # Add async locks and resource management
         self._scan_lock = asyncio.Lock()
         self._connection_lock = asyncio.Lock()
         self._active_operations: Dict[str, asyncio.Task] = {}
+        self._resource_cleanup_callbacks: List[callable] = []
+
+        # ROCK Pi 4B+ specific network optimizations
+        self.ethernet_interfaces = self._detect_ethernet_interfaces()
+        self.wifi_interfaces = self._detect_wifi_interfaces()
+        self.poe_capable = self._detect_poe_capability()
+        self.hardware_platform = self._detect_hardware_platform()
+
+        # Apply platform-specific optimizations on initialization
+        if self.hardware_platform == "OP1":
+            self._apply_op1_optimizations()
+
+    def _detect_hardware_platform(self) -> str:
+        """Detect hardware platform for optimization"""
+        try:
+            with open("/proc/device-tree/compatible", "r") as f:
+                compatible = f.read().strip()
+                if "rockchip,op1" in compatible or "rockchip,rk3399-op1" in compatible:
+                    return "OP1"
+                elif "rockchip,rk3399" in compatible:
+                    return "RK3399"
+        except Exception:
+            pass
+        return "UNKNOWN"
+
+    def _detect_ethernet_interfaces(self) -> List[str]:
+        """Detect available Ethernet interfaces"""
+        try:
+            result = subprocess.run(
+                ["ip", "link", "show"], capture_output=True, text=True, timeout=5
+            )
+            interfaces = []
+            for line in result.stdout.split("\n"):
+                if "state UP" in line or "state DOWN" in line:
+                    if any(prefix in line for prefix in ["eth", "enp", "eno"]):
+                        interface = line.split(":")[1].strip()
+                        interfaces.append(interface)
+            return interfaces
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"Failed to detect Ethernet interfaces: {e}")
+            return []
+
+    def _detect_wifi_interfaces(self) -> List[str]:
+        """Detect available WiFi interfaces"""
+        try:
+            result = subprocess.run(
+                ["iw", "dev"], capture_output=True, text=True, timeout=5
+            )
+            interfaces = []
+            for line in result.stdout.split("\n"):
+                if "Interface" in line:
+                    interface = line.split("Interface")[1].strip()
+                    interfaces.append(interface)
+            return interfaces
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"Failed to detect WiFi interfaces: {e}")
+            return []
+
+    def _detect_poe_capability(self) -> bool:
+        """Detect if PoE HAT is connected (ROCK Pi 4B+ feature)"""
+        try:
+            # Check for PoE HAT on I2C
+            result = subprocess.run(
+                ["i2cdetect", "-y", "1"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            # Common PoE HAT I2C addresses
+            poe_addresses = ["51", "52", "53"]
+            poe_detected = any(addr in result.stdout for addr in poe_addresses)
+
+            if poe_detected and self.logger:
+                self.logger.info("PoE HAT detected on ROCK Pi 4B+")
+
+            return poe_detected
+
+        except Exception:
+            return False
+
+    def _apply_op1_optimizations(self) -> bool:
+        """Apply OP1-specific network optimizations"""
+        try:
+            optimizations_applied = 0
+
+            # Optimize Ethernet interfaces
+            for interface in self.ethernet_interfaces:
+                try:
+                    # Enable hardware offloading features available on OP1
+                    optimizations = [
+                        f"ethtool -K {interface} rx-checksumming on",
+                        f"ethtool -K {interface} tx-checksumming on",
+                        f"ethtool -K {interface} scatter-gather on",
+                        f"ethtool -K {interface} tcp-segmentation-offload on",
+                        f"ethtool -K {interface} generic-segmentation-offload on",
+                        # Optimize ring buffers for OP1
+                        f"ethtool -G {interface} rx 512 tx 512",
+                    ]
+
+                    for cmd in optimizations:
+                        try:
+                            subprocess.run(
+                                cmd.split(), check=True, timeout=5, capture_output=True
+                            )
+                            optimizations_applied += 1
+                            if self.logger:
+                                self.logger.debug(f"Applied: {cmd}")
+                        except subprocess.CalledProcessError:
+                            # Some optimizations may not be supported, continue
+                            pass
+
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(
+                            f"Ethernet optimization failed for {interface}: {e}"
+                        )
+
+            # Optimize WiFi power management for BT 5.0 coexistence
+            for interface in self.wifi_interfaces:
+                try:
+                    # Disable aggressive power saving that might interfere with BLE
+                    subprocess.run(
+                        ["iwconfig", interface, "power", "off"],
+                        check=True,
+                        timeout=5,
+                        capture_output=True,
+                    )
+                    optimizations_applied += 1
+                    if self.logger:
+                        self.logger.info(f"Disabled power management for {interface}")
+                except subprocess.CalledProcessError:
+                    # Power management may not be supported, continue
+                    pass
+
+            if self.logger:
+                self.logger.info(
+                    f"Applied {optimizations_applied} OP1 network optimizations"
+                )
+
+            return optimizations_applied > 0
+
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"OP1 optimization failed: {e}")
+            return False
 
     async def scan_networks(
         self, timeout: Optional[float] = None
@@ -528,3 +680,88 @@ class NetworkService(INetworkService):
             if self.logger:
                 self.logger.error(f"Connection check failed: {e}")
             return False
+
+    async def cleanup_resources(self) -> None:
+        """Cleanup all network resources and active operations"""
+        try:
+            if self.logger:
+                self.logger.info("Cleaning up network resources")
+
+            # Cancel all active operations
+            await self.cancel_all_operations()
+
+            # Execute cleanup callbacks
+            for callback in self._resource_cleanup_callbacks:
+                try:
+                    await callback()
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(f"Resource cleanup callback failed: {e}")
+
+            # Clear caches
+            self.cache.invalidate()
+            self.performance_metrics.clear()
+
+            # Reset connection state
+            self._connection_status = ConnectionStatus.DISCONNECTED
+            self._current_connection = None
+
+            if self.logger:
+                self.logger.info("Network resource cleanup completed")
+
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error during network resource cleanup: {e}")
+
+    def register_cleanup_callback(self, callback: callable) -> None:
+        """Register a callback to be called during resource cleanup"""
+        self._resource_cleanup_callbacks.append(callback)
+
+    async def __aenter__(self):
+        """Async context manager entry"""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit with proper cleanup"""
+        await self.cleanup_resources()
+
+    async def get_connection_health(self) -> Dict[str, Any]:
+        """Get detailed connection health information"""
+        try:
+            health_info = {
+                "connected": self.is_connected(),
+                "connection_status": self._connection_status.value
+                if hasattr(self._connection_status, "value")
+                else str(self._connection_status),
+                "current_connection": self._current_connection.__dict__
+                if self._current_connection
+                else None,
+                "active_operations": len(self._active_operations),
+                "ethernet_interfaces": self.ethernet_interfaces,
+                "wifi_interfaces": self.wifi_interfaces,
+                "poe_capable": self.poe_capable,
+                "platform": self.hardware_platform,
+                "cache_valid": self.cache.get_cached_networks() is not None,
+            }
+
+            # Add recent performance metrics
+            recent_metrics = [
+                m for m in self.performance_metrics[-5:]
+            ]  # Last 5 operations
+            health_info["recent_operations"] = [
+                {
+                    "operation": m.operation_name,
+                    "duration_ms": m.duration_ms,
+                    "success": m.success,
+                    "error": m.error_message,
+                }
+                for m in recent_metrics
+                if m.end_time is not None
+            ]
+
+            return health_info
+
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to get connection health: {e}")
+            return {"error": str(e)}

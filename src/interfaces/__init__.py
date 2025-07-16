@@ -38,6 +38,21 @@ class DeviceState(Enum):
     FACTORY_RESET = "factory_reset"
 
 
+class ProvisioningEvent(Enum):
+    """Events that occur during provisioning process"""
+
+    STARTED = "started"
+    NETWORK_SCAN_REQUESTED = "network_scan_requested"
+    NETWORK_SCAN_COMPLETED = "network_scan_completed"
+    CREDENTIALS_RECEIVED = "credentials_received"
+    NETWORK_CONNECTION_STARTED = "network_connection_started"
+    NETWORK_CONNECTION_SUCCESS = "network_connection_success"
+    NETWORK_CONNECTION_FAILED = "network_connection_failed"
+    PROVISIONING_COMPLETED = "provisioning_completed"
+    PROVISIONING_FAILED = "provisioning_failed"
+    FACTORY_RESET_REQUESTED = "factory_reset_requested"
+
+
 class SecurityLevel(Enum):
     LOW = "low"
     MEDIUM = "medium"
@@ -524,6 +539,7 @@ class IConfigurationWriter(ABC):
 __all__ = [
     "ConnectionStatus",
     "DeviceState",
+    "ProvisioningEvent",
     "SecurityLevel",
     "NetworkInfo",
     "DeviceInfo",
@@ -549,4 +565,5 @@ __all__ = [
     "IConfigurationWriter",
     "IValidationService",
     "IStateMachine",
+    "ProvisioningEvent",
 ]

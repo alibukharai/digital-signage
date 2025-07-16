@@ -188,9 +188,4 @@ filterwarnings = [
     "ignore::PendingDeprecationWarning",
 ]
 
-# Test directories and patterns
-collect_ignore = [
-    "setup.py",
-    "build",
-    "dist",
-]
+# Test directories and patterns (moved to tool:pytest section above)

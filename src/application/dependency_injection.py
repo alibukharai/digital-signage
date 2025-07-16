@@ -2,9 +2,10 @@
 Dependency injection container for the application layer
 """
 
+import inspect
 import weakref
 from threading import Lock
-from typing import Any, Callable, Dict, Optional, Type, TypeVar, Union
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union
 
 T = TypeVar("T")
 
@@ -90,30 +91,53 @@ class Container:
         return self
 
     def resolve(self, service_type: Type[T]) -> T:
-        """Resolve a service"""
-        if service_type not in self._services:
-            raise ValueError(f"Service {service_type.__name__} is not registered")
+        """Resolve a service with enhanced error handling"""
+        with self._lock:
+            try:
+                if service_type not in self._services:
+                    available_services = [s.__name__ for s in self._services.keys()]
+                    raise ValueError(
+                        f"Service {service_type.__name__} is not registered. "
+                        f"Available services: {available_services}"
+                    )
 
-        descriptor = self._services[service_type]
+                descriptor = self._services[service_type]
 
-        # Return existing instance if available
-        if descriptor.instance is not None:
-            return descriptor.instance
+                # Return existing instance if available
+                if descriptor.instance is not None:
+                    return descriptor.instance
 
-        # Check singleton cache
-        if descriptor.lifetime == ServiceLifetime.SINGLETON:
-            if service_type in self._singletons:
-                return self._singletons[service_type]
+                # Check singleton cache
+                if descriptor.lifetime == ServiceLifetime.SINGLETON:
+                    if service_type in self._singletons:
+                        return self._singletons[service_type]
 
-        # Create new instance
-        instance = self._create_instance(descriptor)
+                # Pre-check for circular dependencies before attempting creation
+                try:
+                    self._check_circular_dependencies(service_type, set())
+                except ValueError as circular_error:
+                    raise ValueError(
+                        f"Cannot resolve {service_type.__name__}: {circular_error}"
+                    )
 
-        # Cache singleton
-        if descriptor.lifetime == ServiceLifetime.SINGLETON:
-            with self._lock:
-                self._singletons[service_type] = instance
+                # Create new instance
+                instance = self._create_instance(descriptor)
 
-        return instance
+                # Cache singleton
+                if descriptor.lifetime == ServiceLifetime.SINGLETON:
+                    self._singletons[service_type] = instance
+
+                return instance
+
+            except Exception as e:
+                # Enhanced error context for resolution failures
+                if "Cannot resolve" in str(e) or "Circular dependency" in str(e):
+                    raise  # Re-raise with existing context
+                else:
+                    raise ValueError(
+                        f"Service resolution failed for {service_type.__name__}: "
+                        f"{type(e).__name__}: {str(e)}"
+                    )
 
     def try_resolve(self, service_type: Type[T]) -> Optional[T]:
         """Try to resolve a service, return None if not found"""
@@ -165,7 +189,6 @@ class Container:
 
     def _create_with_dependency_injection(self, descriptor: ServiceDescriptor) -> Any:
         """Create instance with simplified and more robust dependency injection"""
-        import inspect
 
         try:
             sig = inspect.signature(descriptor.implementation_type.__init__)
@@ -278,82 +301,171 @@ class Container:
 
         return validation_results
 
-    def _check_circular_dependencies(self, service_type: Type, visited: set) -> None:
-        """Check for circular dependencies without creating instances"""
-        if service_type in visited:
-            dependency_chain = " -> ".join([t.__name__ for t in visited])
-            raise ValueError(
-                f"Circular dependency detected: {dependency_chain} -> {service_type.__name__}"
-            )
+    def _check_circular_dependencies(
+        self, service_type: Type, resolution_path: set
+    ) -> None:
+        """Check for circular dependencies in service resolution"""
+        if service_type in resolution_path:
+            path_list = list(resolution_path) + [service_type]
+            path_names = " -> ".join([t.__name__ for t in path_list])
+            raise ValueError(f"Circular dependency detected: {path_names}")
 
         if service_type not in self._services:
-            return  # External dependency, can't check further
+            # Service not registered, can't check dependencies
+            return
 
         descriptor = self._services[service_type]
+
+        # Only check implementation types (not factories or instances)
         if not descriptor.implementation_type:
-            return  # Factory or instance, can't analyze dependencies
+            return
 
-        visited.add(service_type)
+        # Add current service to resolution path
+        new_path = resolution_path | {service_type}
 
+        # Get constructor parameters
         try:
-            import inspect
-
-            sig = inspect.signature(descriptor.implementation_type.__init__)
-            params = list(sig.parameters.values())[1:]  # Skip 'self'
+            signature = inspect.signature(descriptor.implementation_type.__init__)
+            params = [p for name, p in signature.parameters.items() if name != "self"]
 
             for param in params:
-                if param.annotation != inspect.Parameter.empty:
-                    if param.annotation in self._services:
-                        self._check_circular_dependencies(
-                            param.annotation, visited.copy()
-                        )
-        except Exception:
-            # If we can't analyze, assume it's OK
-            pass
-        finally:
-            visited.discard(service_type)
+                param_type = param.annotation
 
-    def _check_missing_dependencies(self, implementation_type: Type) -> list:
-        """Check for missing dependencies in a service"""
-        missing = []
-
-        try:
-            import inspect
-
-            sig = inspect.signature(implementation_type.__init__)
-            params = list(sig.parameters.values())[1:]  # Skip 'self'
-
-            for param in params:
+                # Skip parameters without type annotations or with defaults
                 if (
-                    param.annotation != inspect.Parameter.empty
-                    and param.default == inspect.Parameter.empty
-                    and param.annotation not in self._services
+                    param_type == inspect.Parameter.empty
+                    or param.default != inspect.Parameter.empty
                 ):
-                    missing.append(param.annotation.__name__)
+                    continue
+
+                # Recursively check dependencies
+                self._check_circular_dependencies(param_type, new_path)
+
         except Exception:
-            # If we can't analyze, assume it's OK
+            # If we can't inspect the constructor, skip circular dependency check
             pass
 
-        return missing
+    def _check_missing_dependencies(self, implementation_type: Type) -> List[str]:
+        """Check for missing dependencies in a service implementation"""
+        missing_deps = []
 
+        try:
+            signature = inspect.signature(implementation_type.__init__)
+            params = [p for name, p in signature.parameters.items() if name != "self"]
 
-# Global container instance
-_container: Optional[Container] = None
-_container_lock = Lock()
+            for param in params:
+                param_type = param.annotation
 
+                # Skip parameters without type annotations or with defaults
+                if (
+                    param_type == inspect.Parameter.empty
+                    or param.default != inspect.Parameter.empty
+                ):
+                    continue
 
-def get_container() -> Container:
-    """Get the global container instance"""
-    global _container
-    if _container is None:
-        with _container_lock:
-            if _container is None:
-                _container = Container()
-    return _container
+                # Check if dependency is registered
+                if param_type not in self._services:
+                    missing_deps.append(param_type.__name__)
 
+        except Exception:
+            # If we can't inspect the constructor, return empty list
+            pass
 
-def reset_container() -> None:
-    """Reset the global container"""
-    global _container
-    with _container_lock:
-        _container = None
+        return missing_deps
+
+    def dispose(self) -> None:
+        """Dispose of all services and clear resources"""
+        with self._lock:
+            try:
+                # Dispose of singleton instances that support disposal
+                disposed_count = 0
+                for service_type, instance in self._singletons.items():
+                    try:
+                        # Check if instance has dispose method
+                        if hasattr(instance, "dispose"):
+                            instance.dispose()
+                            disposed_count += 1
+                        elif hasattr(instance, "close"):
+                            instance.close()
+                            disposed_count += 1
+                        elif hasattr(instance, "__exit__"):
+                            # Context manager - call exit
+                            instance.__exit__(None, None, None)
+                            disposed_count += 1
+                    except Exception as dispose_error:
+                        # Log disposal errors but continue with cleanup
+                        # Note: We don't have logger access here, so we'll silently continue
+                        pass
+
+                # Clear all collections
+                self._services.clear()
+                self._singletons.clear()
+
+            except Exception:
+                # Ensure cleanup even if disposal fails
+                self._services.clear()
+                self._singletons.clear()
+
+    def __enter__(self) -> "Container":
+        """Context manager entry"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit with automatic disposal"""
+        self.dispose()
+
+    def get_service_info(self, service_type: Type) -> Optional[Dict[str, Any]]:
+        """Get information about a registered service"""
+        if service_type not in self._services:
+            return None
+
+        descriptor = self._services[service_type]
+
+        info = {
+            "service_type": service_type.__name__,
+            "lifetime": descriptor.lifetime,
+            "has_instance": descriptor.instance is not None,
+            "is_singleton_cached": service_type in self._singletons,
+            "implementation_type": descriptor.implementation_type.__name__
+            if descriptor.implementation_type
+            else None,
+            "has_factory": descriptor.factory is not None,
+        }
+
+        # Add dependency information
+        if descriptor.implementation_type:
+            try:
+                signature = inspect.signature(descriptor.implementation_type.__init__)
+                params = [
+                    p for name, p in signature.parameters.items() if name != "self"
+                ]
+
+                dependencies = []
+                for param in params:
+                    if param.annotation != inspect.Parameter.empty:
+                        dependencies.append(
+                            {
+                                "name": param.name,
+                                "type": param.annotation.__name__,
+                                "has_default": param.default != inspect.Parameter.empty,
+                                "is_registered": param.annotation in self._services,
+                            }
+                        )
+
+                info["dependencies"] = dependencies
+
+            except Exception:
+                info["dependencies"] = []
+
+        return info
+
+    def get_all_service_info(self) -> Dict[str, Any]:
+        """Get information about all registered services"""
+        return {
+            "service_count": len(self._services),
+            "singleton_count": len(self._singletons),
+            "services": {
+                service_type.__name__: self.get_service_info(service_type)
+                for service_type in self._services.keys()
+            },
+        }

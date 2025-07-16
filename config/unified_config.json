@@ -1,18 +1,58 @@
 {
-    "_comment": "Unified Configuration for Rock Pi 3399 Provisioning System",
+    "_comment": "ROCK Pi 4B+ Optimized Configuration for Radxa Debian 11",
     "_usage": "Copy this file to /etc/rock-provisioning/config.json or ~/.config/rock-provisioning/config.json",
-    "version": "2.0",
-    "last_updated": "2025-07-15T00:00:00Z",
+    "version": "2.1",
+    "last_updated": "2025-07-16T00:00:00Z",
+    "hardware": {
+        "platform": "rock-pi-4b-plus",
+        "soc": "op1",
+        "architecture": "aarch64",
+        "memory_type": "lpddr4",
+        "bluetooth_version": "5.0",
+        "hdmi_version": "2.0",
+        "max_resolution": "4K@60Hz",
+        "gpio_pins": 40,
+        "poe_support": true
+    },
+    "performance": {
+        "cpu_governor": "ondemand",
+        "cpu_big_max_freq": 2000000,
+        "cpu_little_max_freq": 1500000,
+        "gpu_governor": "simple_ondemand",
+        "memory_optimization": true,
+        "thermal_throttling": {
+            "temp_warn": 70,
+            "temp_critical": 85,
+            "hysteresis": 5
+        }
+    },
     "ble": {
         "service_uuid": "12345678-1234-5678-9abc-123456789abc",
         "wifi_credentials_char_uuid": "12345678-1234-5678-9abc-123456789abd",
         "status_char_uuid": "12345678-1234-5678-9abc-123456789abe",
         "device_info_char_uuid": "12345678-1234-5678-9abc-123456789abf",
-        "advertising_timeout": 300,
+        "version": "5.0",
+        "extended_advertising": true,
+        "max_connections": 3,
+        "advertising_timeout": 600,
         "connection_timeout": 30,
-        "max_connections": 1,
-        "advertising_name": "RockPi-Setup",
+        "advertising_name": "RockPi4B-Setup",
+        "advertising_interval_min": 20,
+        "advertising_interval_max": 40,
+        "connection_interval_min": 6,
+        "connection_interval_max": 12,
+        "supervision_timeout": 4000,
+        "slave_latency": 0,
+        "tx_power_level": 4,
+        "phy_preferences": {
+            "tx_phy": "2M",
+            "rx_phy": "2M"
+        },
         "security": {
+            "pairing_mode": "secure_connections",
+            "io_capability": "display_only",
+            "bonding": true,
+            "mitm_protection": true,
             "connection_rate_limit": 10,
             "block_duration_hours": 1,
             "payload_validation": true,
@@ -176,8 +216,13 @@
         }
     },
     "display": {
+        "preferred_resolution": "auto",
+        "max_resolution": "3840x2160@60",
+        "fallback_resolution": "1920x1080@60",
         "resolution_width": 1920,
         "resolution_height": 1080,
+        "qr_code_size_4k": 800,
+        "qr_code_size_1080p": 400,
         "qr_size_ratio": 0.3,
         "fullscreen": true,
         "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -185,7 +230,10 @@
         "show_status": true,
         "status_position": "bottom",
         "background_color": "#000000",
-        "text_color": "#FFFFFF"
+        "text_color": "#FFFFFF",
+        "auto_brightness": true,
+        "hdmi_optimization": true,
+        "display_timeout": 0
     },
     "network": {
         "config_file_primary": "/etc/wifi_config.json",
@@ -195,7 +243,11 @@
         "max_retry_attempts": 3,
         "interface_name": "wlan0",
         "enable_ethernet_fallback": true,
-        "ethernet_interface": "eth0"
+        "ethernet_interface": "eth0",
+        "ethernet_offload": true,
+        "wifi_power_save": false,
+        "poe_detection": true,
+        "interface_priorities": ["eth0", "wlan0"]
     },
     "logging": {
         "level": "INFO",

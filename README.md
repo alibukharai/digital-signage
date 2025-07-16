@@ -1,10 +1,33 @@
-# Rock Pi 3399 Digital Signage Provisioning System
+# ROCK Pi 4B+ Digital Signage Provisioning System
 
-A modern, production-grade network provisioning system for Rock Pi 3399 devices that enables secure WiFi configuration through Bluetooth Low Energy (BLE) and visual QR code display for digital signage applications.
+A modern, production-grade network provisioning system for ROCK Pi 4B+ devices that enables secure WiFi configuration through Bluetooth Low Energy (BLE) 5.0 and visual QR code display for digital signage applications.
 
 ## 🌟 Overview
 
-This system provides a comprehensive solution for configuring WiFi credentials on Rock Pi 3399 devices without requiring a keyboard, mouse, or direct network access. The device displays a QR code on its HDMI output and broadcasts a BLE service that mobile applications can connect to for credential provisioning. Designed specifically for digital signage deployments where devices need seamless, headless network configuration.
+This system provides a comprehensive solution for configuring WiFi credentials on ROCK Pi 4B+ devices without requiring a keyboard, mouse, or direct network access. The device displays a QR code on its HDMI 2.0 output (supporting up to 4K@60Hz) and broadcasts a BLE 5.0 service that mobile applications can connect to for credential provisioning. Designed specifically for digital signage deployments where devices need seamless, headless network configuration.
+
+## 🔧 Hardware Support
+
+### Primary Target: ROCK Pi 4B+ (OP1 Processor)
+- **Processor**: OP1 (Dual Cortex-A72@2.0GHz + Quad Cortex-A53@1.5GHz)
+- **Memory**: LPDDR4 dual-channel up to 4GB
+- **Display**: HDMI 2.0 up to 4K@60Hz with auto-detection
+- **Connectivity**: 802.11ac WiFi, Bluetooth 5.0, Gigabit Ethernet with PoE
+- **Storage**: eMMC, μSD, M.2 NVMe SSD support
+- **GPIO**: 40-pin header with full hardware abstraction
+
+### Also Supports: ROCK Pi 4 (RK3399)
+- Standard RK3399 features with optimized performance
+- Bluetooth 4.2 and standard HDMI support
+- Compatible with all core provisioning features
+
+### Hardware-Specific Optimizations
+- **OP1 Performance**: Big.LITTLE CPU scheduling and thermal management
+- **4K Display**: Automatic resolution detection and QR code scaling
+- **BLE 5.0**: Extended advertising, multiple connections, 2M PHY
+- **Network**: Hardware offloading, PoE detection, WiFi power management
+- **GPIO**: Status LEDs, button support, PWM control
+- **Memory**: LPDDR4 dual-channel optimizations
 
 ## 🏗️ Architecture
 
@@ -82,18 +105,34 @@ The system follows **Clean Architecture** principles with comprehensive async/aw
 ### Prerequisites
 
 **Hardware Requirements:**
-- Rock Pi 3399 or compatible ARM64 SBC
-- HDMI display for QR code output
-- BLE-capable WiFi adapter
-- MicroSD card (16GB+ recommended)
+- **ROCK Pi 4B+** (OP1 processor) - **Recommended**
+- ROCK Pi 4 (RK3399) - Also supported
+- HDMI 2.0 display for 4K QR code output (HDMI 1.4 for 1080p)
+- 4K-capable display recommended for optimal QR code visibility
+- MicroSD card (16GB+ recommended) or eMMC/NVMe storage
 
 **Software Requirements:**
-- Ubuntu 20.04+ or Debian 11+ (ARM64)
-- Python 3.8+ (3.10+ recommended)
+- **Radxa Debian 11** (Official) - **Recommended for ROCK Pi 4B+**
+- Ubuntu 20.04+ or Debian 11+ (ARM64) - Alternative
+- Python 3.10+ (optimized for OP1 performance)
 - SystemD for service management
 
-### Installation
+### Installation on ROCK Pi 4B+
 
+#### Option 1: Enhanced Setup (Recommended)
+```bash
+# Clone the repository
+git clone <repository-url>
+cd rock3399-digital-signage
+
+# Run ROCK Pi 4B+ optimized setup
+./setup-rockpi4b.sh
+
+# Verify all optimizations are working
+./verify_rockpi4b.py
+```
+
+#### Option 2: Standard Setup
 ```bash
 # Clone the repository
 git clone <repository-url>
@@ -124,7 +163,7 @@ sudo systemctl start rock-provisioning
 # Monitor logs in real-time
 make logs
 
-# Check system health
+# Check system health and ROCK Pi 4B+ optimizations
 python3 scripts/verify_installation.py
 ```
 

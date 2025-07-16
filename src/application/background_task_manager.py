@@ -121,25 +121,52 @@ class BackgroundTaskManager:
             return False
 
     async def _task_wrapper(self, config: TaskConfig) -> None:
-        """Wrapper for tasks that handles execution time limits and exception handling"""
+        """Wrapper for tasks that handles execution time limits and exception handling with improved timeout management"""
         metrics = self.task_metrics[config.name]
+        task_start_time = time.time()
 
         try:
             start_time = time.time()
 
             if config.max_execution_time:
-                # Run task with timeout
-                await asyncio.wait_for(
-                    config.task_func(*config.args, **config.kwargs),
-                    timeout=config.max_execution_time,
-                )
+                # Run task with timeout and proper cancellation handling
+                try:
+                    await asyncio.wait_for(
+                        config.task_func(*config.args, **config.kwargs),
+                        timeout=config.max_execution_time,
+                    )
+                except asyncio.TimeoutError:
+                    # Ensure task is properly cancelled
+                    current_task = asyncio.current_task()
+                    if current_task and not current_task.cancelled():
+                        current_task.cancel()
+                    raise
             else:
-                # Run task without timeout
-                await config.task_func(*config.args, **config.kwargs)
+                # Run task without timeout but with cancellation support
+                task = asyncio.create_task(
+                    config.task_func(*config.args, **config.kwargs)
+                )
+
+                # Monitor for external cancellation requests
+                while not task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
+                        break
+                    except asyncio.TimeoutError:
+                        # Check if we should continue running
+                        if not self.is_running or config.name not in self.tasks:
+                            task.cancel()
+                            try:
+                                await task
+                            except asyncio.CancelledError:
+                                pass
+                            raise asyncio.CancelledError("Task cancelled externally")
+                        continue
 
             # Task completed successfully
             execution_time = time.time() - start_time
             metrics.execution_time = execution_time
+            metrics.is_healthy = True
             self.logger.info(
                 f"Task {config.name} completed successfully in {execution_time:.2f}s"
             )
@@ -147,19 +174,26 @@ class BackgroundTaskManager:
         except asyncio.TimeoutError:
             metrics.total_failures += 1
             metrics.is_healthy = False
+            execution_time = time.time() - task_start_time
             self.logger.error(
-                f"Task {config.name} timed out after {config.max_execution_time}s"
+                f"Task {config.name} timed out after {config.max_execution_time}s (actual: {execution_time:.2f}s)"
             )
             await self._handle_task_failure(config, "timeout")
 
         except asyncio.CancelledError:
-            self.logger.info(f"Task {config.name} was cancelled")
+            execution_time = time.time() - task_start_time
+            self.logger.info(
+                f"Task {config.name} was cancelled after {execution_time:.2f}s"
+            )
             raise  # Re-raise to maintain cancellation semantics
 
         except Exception as e:
             metrics.total_failures += 1
             metrics.is_healthy = False
-            self.logger.error(f"Task {config.name} failed with exception: {e}")
+            execution_time = time.time() - task_start_time
+            self.logger.error(
+                f"Task {config.name} failed after {execution_time:.2f}s with exception: {e}"
+            )
             await self._handle_task_failure(config, "exception")
 
     async def _handle_task_failure(self, config: TaskConfig, failure_type: str) -> None:
@@ -251,38 +285,72 @@ class BackgroundTaskManager:
             self.logger.error(f"Error stopping tasks: {e}")
 
     async def _health_monitoring_loop(self) -> None:
-        """Continuous health monitoring for all tasks"""
+        """Continuous health monitoring for all tasks with improved coordination"""
         try:
+            self.logger.info("Starting health monitoring loop")
+
             while self.tasks:  # Continue while there are tasks to monitor
                 await asyncio.sleep(5.0)  # Check every 5 seconds
 
                 current_time = datetime.now()
                 failed_tasks = []
+                healthy_tasks = []
 
+                # Collect health status for all tasks
                 for name, task in list(self.tasks.items()):
                     try:
-                        await self._check_task_health(name, task, current_time)
+                        is_healthy = await self._check_task_health(
+                            name, task, current_time
+                        )
+                        if is_healthy:
+                            healthy_tasks.append(name)
+                        else:
+                            failed_tasks.append(name)
                     except Exception as e:
                         self.logger.error(f"Health check failed for task {name}: {e}")
                         failed_tasks.append(name)
 
-                # Handle any failed health checks
+                # Log periodic health summary
+                if len(self.tasks) > 1:
+                    self.logger.debug(
+                        f"Health check summary: {len(healthy_tasks)} healthy, "
+                        f"{len(failed_tasks)} failed out of {len(self.tasks)} total tasks"
+                    )
+
+                # Handle any failed health checks with coordination
+                recovery_tasks = []
                 for name in failed_tasks:
                     if name in self.task_configs:
                         config = self.task_configs[name]
-                        await self._handle_task_failure(config, "health_check_failure")
+                        # Create recovery task to avoid blocking the health monitor
+                        recovery_task = asyncio.create_task(
+                            self._handle_task_failure(config, "health_check_failure")
+                        )
+                        recovery_tasks.append(recovery_task)
+
+                # Wait for recovery tasks to complete (with timeout)
+                if recovery_tasks:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.gather(*recovery_tasks, return_exceptions=True),
+                            timeout=30.0,  # 30 second timeout for recovery operations
+                        )
+                    except asyncio.TimeoutError:
+                        self.logger.warning("Some task recovery operations timed out")
 
         except asyncio.CancelledError:
             self.logger.info("Health monitoring loop cancelled")
         except Exception as e:
             self.logger.error(f"Health monitoring loop error: {e}")
+        finally:
+            self.logger.info("Health monitoring loop stopped")
 
     async def _check_task_health(
         self, name: str, task: asyncio.Task, current_time: datetime
-    ) -> None:
-        """Check health of a specific task"""
+    ) -> bool:
+        """Check health of a specific task and return health status"""
         if name not in self.task_metrics or name not in self.task_configs:
-            return
+            return False
 
         metrics = self.task_metrics[name]
         config = self.task_configs[name]
@@ -294,7 +362,8 @@ class BackgroundTaskManager:
         if task.done():
             if task.cancelled():
                 self.logger.debug(f"Task {name} was cancelled")
-                return
+                metrics.is_healthy = False
+                return False
             elif task.exception():
                 exception = task.exception()
                 self.logger.warning(
@@ -302,13 +371,29 @@ class BackgroundTaskManager:
                 )
                 metrics.is_healthy = False
                 await self._handle_task_failure(config, "unexpected_completion")
+                return False
             else:
                 # Task completed normally
                 self.logger.info(f"Task {name} completed normally")
                 metrics.is_healthy = True
+                return True
         else:
-            # Task is still running - mark as healthy
+            # Task is still running - check if it's been running too long
+            if config.max_execution_time:
+                running_time = (current_time - metrics.start_time).total_seconds()
+                if running_time > config.max_execution_time * 1.2:  # 20% grace period
+                    self.logger.warning(
+                        f"Task {name} has been running for {running_time:.1f}s, "
+                        f"exceeding max time {config.max_execution_time}s"
+                    )
+                    metrics.is_healthy = False
+                    # Cancel the long-running task
+                    task.cancel()
+                    return False
+
+            # Task is still running and healthy
             metrics.is_healthy = True
+            return True
 
     def get_task_status(self) -> Dict[str, Any]:
         """Get detailed status of all tasks including health metrics"""
@@ -426,3 +511,57 @@ class BackgroundTaskManager:
         except Exception as e:
             self.logger.error(f"Failed to restart task {name}: {e}")
             return False
+
+    async def start(self) -> None:
+        """Start the background task manager"""
+        self.is_running = True
+        self.logger.info("Background task manager started")
+
+    async def stop(self) -> None:
+        """Stop the background task manager and cleanup all resources"""
+        try:
+            self.is_running = False
+            self.logger.info("Stopping background task manager...")
+
+            # Stop all tasks with proper cleanup
+            await self.stop_all_tasks()
+
+            self.logger.info("Background task manager stopped")
+
+        except Exception as e:
+            self.logger.error(f"Error stopping background task manager: {e}")
+
+    async def __aenter__(self):
+        """Async context manager entry"""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit with cleanup"""
+        await self.stop()
+
+    def get_health_summary(self) -> Dict[str, Any]:
+        """Get overall health summary of the task manager"""
+        total_tasks = len(self.tasks)
+        healthy_tasks = sum(
+            1 for metrics in self.task_metrics.values() if metrics.is_healthy
+        )
+        failed_tasks = total_tasks - healthy_tasks
+
+        total_failures = sum(
+            metrics.total_failures for metrics in self.task_metrics.values()
+        )
+        total_restarts = sum(
+            metrics.restart_count for metrics in self.task_metrics.values()
+        )
+
+        return {
+            "total_tasks": total_tasks,
+            "healthy_tasks": healthy_tasks,
+            "failed_tasks": failed_tasks,
+            "total_failures": total_failures,
+            "total_restarts": total_restarts,
+            "health_monitor_running": self._health_monitor_task is not None
+            and not self._health_monitor_task.done(),
+            "manager_running": self.is_running,
+        }
