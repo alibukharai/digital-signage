@@ -362,7 +362,14 @@ def retry_with_backoff(
                             f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.1f}s"
                         )
 
-                    time.sleep(delay)
+                    # Use threading.Event for non-blocking sleep in sync context
+                    import threading
+                    shutdown_event = getattr(threading.current_thread(), '_shutdown_event', None)
+                    if shutdown_event and hasattr(shutdown_event, 'wait'):
+                        if shutdown_event.wait(delay):  # Returns True if shutdown requested
+                            raise InterruptedError("Retry interrupted by shutdown")
+                    else:
+                        time.sleep(delay)
 
         # Return appropriate wrapper based on function type
         if inspect.iscoroutinefunction(func):

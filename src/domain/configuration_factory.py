@@ -96,7 +96,8 @@ class ConfigurationFactory:
                     return self._create_config_from_data(data)
                 except Exception as e:
                     # Log error and fall back to SOC-optimized default
-                    print(f"Failed to load config from {config_path}: {e}")
+                    import logging
+            logging.getLogger(__name__).warning(f"Failed to load config from {config_path}: {e}")
 
         return self.create_default()  # SOC-optimized default configuration
 
