@@ -124,9 +124,21 @@ class NetworkService(INetworkService):
                         interface = line.split(":")[1].strip()
                         interfaces.append(interface)
             return interfaces
-        except Exception as e:
+        except subprocess.TimeoutExpired:
             if self.logger:
-                self.logger.warning(f"Failed to detect Ethernet interfaces: {e}")
+                self.logger.warning("Ethernet interface detection timed out")
+            return []
+        except subprocess.CalledProcessError as e:
+            if self.logger:
+                self.logger.warning(f"Command failed to detect Ethernet interfaces: {e}")
+            return []
+        except FileNotFoundError:
+            if self.logger:
+                self.logger.warning("Network tools not found for Ethernet detection")
+            return []
+        except OSError as e:
+            if self.logger:
+                self.logger.warning(f"System error detecting Ethernet interfaces: {e}")
             return []
 
     def _detect_wifi_interfaces(self) -> List[str]:
@@ -141,9 +153,21 @@ class NetworkService(INetworkService):
                     interface = line.split("Interface")[1].strip()
                     interfaces.append(interface)
             return interfaces
-        except Exception as e:
+        except subprocess.TimeoutExpired:
             if self.logger:
-                self.logger.warning(f"Failed to detect WiFi interfaces: {e}")
+                self.logger.warning("WiFi interface detection timed out")
+            return []
+        except subprocess.CalledProcessError as e:
+            if self.logger:
+                self.logger.warning(f"Command failed to detect WiFi interfaces: {e}")
+            return []
+        except FileNotFoundError:
+            if self.logger:
+                self.logger.warning("Wireless tools not found for WiFi detection")
+            return []
+        except OSError as e:
+            if self.logger:
+                self.logger.warning(f"System error detecting WiFi interfaces: {e}")
             return []
 
     def _detect_poe_capability(self) -> bool:
