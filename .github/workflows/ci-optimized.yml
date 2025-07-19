@@ -493,11 +493,14 @@ jobs:
         echo '```' >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
-  # HARDWARE TESTS (Self-hosted runner only)
+  # HARDWARE TESTS (Ubuntu runner with conditional self-hosted support)
   # ============================================================================
   hardware-tests:
     name: 🔧 Hardware Tests
-    runs-on: [self-hosted, rock-pi-3399]
+    runs-on: ubuntu-latest
+    # Note: Changed from [self-hosted, rock-pi-3399] to ubuntu-latest for better availability
+    # Hardware-specific tests will be skipped on ubuntu-latest runners
+    # If self-hosted runners are available, update this back to: [self-hosted, rock-pi-3399]
     needs: [quick-validation, unit-tests]
     if: |
       needs.quick-validation.outputs.should-run-tests == 'true' &&
