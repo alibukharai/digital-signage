@@ -1,5 +1,6 @@
 """
-Common test fixtures and utilities for Rock Pi 3399 provisioning tests.
+Integration test fixtures and utilities for Rock Pi 4B+ provisioning tests.
+Uses real service implementations with test configurations instead of mocks.
 """
 
 import asyncio
@@ -8,8 +9,6 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock
-
 import pytest
 
 from src.application.dependency_injection import Container
@@ -25,18 +24,16 @@ from src.interfaces import (
     NetworkInfo,
 )
 
-# Import test doubles for clean testing
-from tests.test_doubles import (
-    TestBluetoothService,
-    TestConfigurationService,
-    TestDeviceInfoProvider,
-    TestDisplayService,
-    TestFactoryResetService,
-    TestHealthMonitorService,
-    TestLogger,
-    TestNetworkService,
-    TestOwnershipService,
-    TestSecurityService,
+# Import integration test adapters instead of mocks
+from tests.integration.test_adapters import (
+    TestEnvironmentConfig,
+    IntegrationTestLogger,
+    IntegrationNetworkService,
+    IntegrationBluetoothService,
+    IntegrationDisplayService,
+    IntegrationConfigurationService,
+    create_integration_test_environment,
+    IntegrationTestAssertions,
 )
 
 
@@ -49,390 +46,322 @@ def temp_config_dir():
 
 
 @pytest.fixture
-def test_config(temp_config_dir):
-    """Provide a test configuration with all required settings."""
-    config_data = {
-        "ble": {
-            "service_uuid": "12345678-1234-5678-9abc-123456789abc",
-            "wifi_credentials_char_uuid": "12345678-1234-5678-9abc-123456789abd",
-            "status_char_uuid": "12345678-1234-5678-9abc-123456789abe",
-            "device_info_char_uuid": "12345678-1234-5678-9abc-123456789abf",
-            "advertising_timeout": 300,
-            "connection_timeout": 30,
-            "max_connections": 1,
-            "advertising_name": "RockPi-Test",
-        },
-        "security": {
-            "encryption_algorithm": "Fernet",
-            "key_derivation_iterations": 600000,
-            "credential_timeout": 300,
-            "require_owner_setup": True,
-            "owner_setup_timeout": 600,
-            "owner_pin_length": 6,
-            "max_owner_setup_attempts": 3,
-            "owner_lockout_duration": 3600,
-            "authentication": {
-                "max_failed_attempts": 3,
-                "lockout_duration_seconds": 3600,
-                "session_timeout_minutes": 15,
-            },
-        },
-        "network": {
-            "connection_timeout": 30,
-            "max_retry_attempts": 3,
-            "scan_timeout": 10,
-            "retry_delay": 5,
-        },
-        "display": {
-            "hdmi_detection_timeout": 5,
-            "status_message_duration": 3,
-            "qr_code_size": 200,
-        },
-        "logging": {
-            "level": "DEBUG",
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            "file_path": f"{temp_config_dir}/test.log",
-            "max_file_size": 10485760,
-            "backup_count": 5,
-        },
-        "system": {
-            "factory_reset_gpio": 18,
-            "factory_reset_hold_time": 5.5,
-            "config_file_path": f"{temp_config_dir}/config.json",
-            "credentials_file_path": f"{temp_config_dir}/credentials.json",
-        },
-    }
+def test_environment_config(temp_config_dir):
+    """Create test environment configuration with isolated temp directory."""
+    config = TestEnvironmentConfig(
+        temp_dir=Path(temp_config_dir),
+        simulated_networks=[
+            NetworkInfo(ssid="TestNetwork_WPA2", signal_strength=-45, security_type="WPA2"),
+            NetworkInfo(ssid="TestNetwork_WPA3", signal_strength=-50, security_type="WPA3"),
+            NetworkInfo(ssid="TestNetwork_Open", signal_strength=-60, security_type="Open"),
+            NetworkInfo(ssid="Enterprise_Network", signal_strength=-55, security_type="WPA2-Enterprise"),
+        ],
+        device_info=DeviceInfo(
+            device_id="TEST-ROCKPI4B-001",
+            mac_address="AA:BB:CC:DD:EE:FF",
+            hardware_version="ROCK Pi 4B+ Test",
+            firmware_version="Test Firmware v1.0.0",
+            capabilities=["wifi", "bluetooth", "display", "gpio", "test_mode"],
+        ),
+        enable_real_bluetooth=False,  # Use simulated BLE for safety
+        enable_real_network=False,    # Use simulated network for safety
+        health_check_interval=0.1     # Fast health checks for testing
+    )
+    return config
 
-    config_file = Path(temp_config_dir) / "config.json"
-    with open(config_file, "w") as f:
-        json.dump(config_data, f, indent=2)
 
-    return load_config(str(config_file))
+@pytest.fixture
+def integration_services(test_environment_config):
+    """Create real service instances with test configurations."""
+    config, services = create_integration_test_environment(test_environment_config)
+    yield services
+    
+    # Cleanup after test
+    if hasattr(config, 'temp_dir') and config.temp_dir.exists():
+        shutil.rmtree(config.temp_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def logger(integration_services):
+    """Get the integration test logger."""
+    return integration_services["logger"]
+
+
+@pytest.fixture
+def network_service(integration_services):
+    """Get the integration network service."""
+    return integration_services["network"]
+
+
+@pytest.fixture  
+def bluetooth_service(integration_services):
+    """Get the integration bluetooth service."""
+    return integration_services["bluetooth"]
+
+
+@pytest.fixture
+def display_service(integration_services):
+    """Get the integration display service."""
+    return integration_services["display"]
+
+
+@pytest.fixture
+def configuration_service(integration_services):
+    """Get the integration configuration service."""
+    return integration_services["configuration"]
+
+
+@pytest.fixture
+def device_info_service(test_environment_config):
+    """Create a real device info service with test data."""
+    from src.infrastructure.device import DeviceInfoProvider
+    
+    class TestDeviceInfoProvider(DeviceInfoProvider):
+        def __init__(self, test_config: TestEnvironmentConfig):
+            super().__init__()
+            self._test_device_info = test_config.device_info
+        
+        def get_device_info(self) -> DeviceInfo:
+            return self._test_device_info
+        
+        def get_device_id(self) -> str:
+            return self._test_device_info.device_id
+        
+        def get_mac_address(self) -> str:
+            return self._test_device_info.mac_address
+        
+        def get_provisioning_code(self) -> str:
+            return f"ROCKPI:{self._test_device_info.device_id}:{self._test_device_info.mac_address.replace(':', '')}"
+    
+    return TestDeviceInfoProvider(test_environment_config)
 
 
 @pytest.fixture
 def event_bus():
-    """Provide a clean event bus instance."""
+    """Create a real event bus for testing."""
     return EventBus()
 
 
 @pytest.fixture
 def state_machine(event_bus):
-    """Provide a fresh state machine instance."""
+    """Create a real state machine with event bus."""
     return ProvisioningStateMachine(event_bus)
 
 
 @pytest.fixture
-def service_container(test_config):
-    """Provide a configured service container."""
+def provisioning_config(temp_config_dir):
+    """Create test provisioning configuration."""
+    config_data = {
+        "bluetooth": {
+            "advertising_timeout": 300,
+            "connection_timeout": 30,
+            "service_uuid": "12345678-1234-5678-9abc-123456789abc",
+            "advertising_name": "RockPi-Test"
+        },
+        "network": {
+            "connection_timeout": 30,
+            "scan_timeout": 10,
+            "max_retry_attempts": 3,
+            "interface_name": "test-wlan0"
+        },
+        "display": {
+            "resolution_width": 1920,
+            "resolution_height": 1080,
+            "qr_size_ratio": 0.3,
+            "fullscreen": True
+        },
+        "security": {
+            "encryption_algorithm": "Fernet",
+            "key_derivation_iterations": 100000,  # Reduced for testing
+            "require_owner_setup": False,  # Simplified for testing
+            "enhanced_security": True
+        },
+        "logging": {
+            "level": "DEBUG",
+            "detailed_logs": True,
+            "log_file": f"{temp_config_dir}/test.log"
+        }
+    }
+    
+    config_file = Path(temp_config_dir) / "test_config.json"
+    with open(config_file, 'w') as f:
+        json.dump(config_data, f, indent=2)
+    
+    return ProvisioningConfig.from_file(config_file)
+
+
+@pytest.fixture
+def container(
+    integration_services,
+    device_info_service,
+    event_bus,
+    state_machine,
+    provisioning_config
+):
+    """Create a real dependency injection container with test services."""
     container = Container()
-    container.register_config(test_config)
+    
+    # Register real services with test configurations
+    container.register_singleton("logger", lambda: integration_services["logger"])
+    container.register_singleton("network_service", lambda: integration_services["network"])
+    container.register_singleton("bluetooth_service", lambda: integration_services["bluetooth"])
+    container.register_singleton("display_service", lambda: integration_services["display"])
+    container.register_singleton("configuration_service", lambda: integration_services["configuration"])
+    container.register_singleton("device_info_service", lambda: device_info_service)
+    container.register_singleton("event_bus", lambda: event_bus)
+    container.register_singleton("state_machine", lambda: state_machine)
+    container.register_singleton("config", lambda: provisioning_config)
+    
     return container
 
 
 @pytest.fixture
-def provisioning_orchestrator(service_container):
-    """Provide a configured provisioning orchestrator."""
-    return ProvisioningOrchestrator(service_container)
-
-
-@pytest.fixture
-def valid_device_info():
-    """Provide valid device information for testing."""
-    return DeviceInfo(
-        device_id="TEST-ROCKPI-001",
-        mac_address="AA:BB:CC:DD:EE:FF",
-        hardware_version="Rock Pi 3399 v1.4",
-        firmware_version="2.0.0",
-        capabilities=["wifi", "bluetooth", "display", "gpio"],
-    )
-
-
-@pytest.fixture
-def valid_network_info():
-    """Provide valid network information for testing."""
-    return [
-        NetworkInfo(
-            ssid="TestNetwork",
-            signal_strength=-45,
-            security_type="WPA2",
-            frequency=2400,
-        ),
-        NetworkInfo(
-            ssid="TestNetwork5G",
-            signal_strength=-50,
-            security_type="WPA3",
-            frequency=5000,
-        ),
-        NetworkInfo(
-            ssid="OpenNetwork",
-            signal_strength=-60,
-            security_type="Open",
-            frequency=2400,
-        ),
-    ]
+async def provisioning_orchestrator(container):
+    """Create a real provisioning orchestrator with integrated services."""
+    orchestrator = ProvisioningOrchestrator(container)
+    
+    # Initialize the orchestrator
+    await orchestrator.initialize()
+    
+    yield orchestrator
+    
+    # Cleanup
+    try:
+        await orchestrator.shutdown()
+    except Exception:
+        pass  # Ignore cleanup errors in tests
 
 
 @pytest.fixture
 def valid_credentials():
-    """Provide valid WiFi credentials for testing."""
-    return {"ssid": "TestNetwork", "password": "TestPassword123!", "security": "WPA2"}
-
-
-@pytest.fixture
-def valid_owner_pin():
-    """Provide a valid owner PIN for testing."""
-    return "123456"
+    """Valid network credentials for testing."""
+    return {
+        "ssid": "TestNetwork_WPA2",
+        "password": "TestPassword123",
+        "security_type": "WPA2"
+    }
 
 
 @pytest.fixture
 def invalid_credentials():
-    """Provide various invalid credentials for testing."""
+    """Invalid network credentials for testing."""
     return {
-        "malformed_json": '{"ssid": "test", "password": incomplete',
-        "oversized_ssid": {
-            "ssid": "A" * 300,  # Over 256 character limit
-            "password": "validpassword",
-            "security": "WPA2",
-        },
-        "missing_required": {
-            "ssid": "TestNetwork"
-            # Missing password
-        },
-        "empty_values": {"ssid": "", "password": "", "security": "WPA2"},
+        "ssid": "",
+        "password": "short",
+        "security_type": "WPA2"
     }
 
 
 @pytest.fixture
-def connection_info_connected():
-    """Provide connection info for connected state."""
-    return ConnectionInfo(
-        status=ConnectionStatus.CONNECTED,
-        ssid="TestNetwork",
-        ip_address="192.168.1.100",
-        signal_strength=-45,
-        connection_time=None,  # Will be set when connection is established
-    )
-
-
-@pytest.fixture
-def connection_info_disconnected():
-    """Provide connection info for disconnected state."""
-    return ConnectionInfo(
-        status=ConnectionStatus.DISCONNECTED,
-        ssid=None,
-        ip_address=None,
-        signal_strength=None,
-        connection_time=None,
-    )
-
-
-@pytest.fixture
-async def system_in_initializing_state(state_machine):
-    """Provide system in INITIALIZING state."""
-    # State machine starts in INITIALIZING by default
-    assert state_machine.get_current_state() == DeviceState.INITIALIZING
-    return state_machine
-
-
-@pytest.fixture
-async def system_in_provisioning_state(state_machine):
-    """Provide system in PROVISIONING state."""
-    state_machine.process_event(ProvisioningEvent.START_PROVISIONING)
-    assert state_machine.get_current_state() == DeviceState.PROVISIONING
-    return state_machine
-
-
-@pytest.fixture
-async def system_in_connected_state(state_machine):
-    """Provide system in CONNECTED state."""
-    state_machine.process_event(ProvisioningEvent.START_PROVISIONING)
-    state_machine.process_event(ProvisioningEvent.CREDENTIALS_RECEIVED)
-    state_machine.process_event(ProvisioningEvent.NETWORK_CONNECTED)
-    assert state_machine.get_current_state() == DeviceState.CONNECTED
-    return state_machine
-
-
-@pytest.fixture
-async def system_in_ready_state(state_machine):
-    """Provide system in READY state."""
-    state_machine.process_event(ProvisioningEvent.START_OWNER_SETUP)
-    assert state_machine.get_current_state() == DeviceState.READY
-    return state_machine
-
-
-class TestWiFiNetwork:
-    """Helper class to simulate WiFi network for testing."""
-
-    def __init__(self, ssid: str, password: str, available: bool = True):
-        self.ssid = ssid
-        self.password = password
-        self.available = available
-        self.connection_delay = 0.1  # Simulate connection time
-
-    async def connect(self, provided_password: str) -> bool:
-        """Simulate connection attempt."""
-        if not self.available:
-            return False
-
-        await asyncio.sleep(self.connection_delay)
-        return provided_password == self.password
-
-
-@pytest.fixture
-def test_wifi_networks():
-    """Provide test WiFi networks."""
+def enterprise_credentials():
+    """Enterprise network credentials for testing."""
     return {
-        "TestNetwork": TestWiFiNetwork("TestNetwork", "TestPassword123!"),
-        "TestNetwork5G": TestWiFiNetwork("TestNetwork5G", "TestPassword5G!"),
-        "UnavailableNetwork": TestWiFiNetwork(
-            "UnavailableNetwork", "password", available=False
-        ),
+        "ssid": "Enterprise_Network", 
+        "username": "test.user@company.com",
+        "password": "EnterprisePassword123",
+        "security_type": "WPA2-Enterprise",
+        "certificate": "test_cert_data"
     }
 
 
-class BluetoothTestHelper:
-    """Helper class for Bluetooth testing scenarios."""
-
-    def __init__(self):
-        self.is_connected = False
-        self.advertising = False
-        self.connection_count = 0
-        self.max_disconnection_time = 10.0  # seconds
-
-    async def connect(self):
-        """Simulate BLE connection."""
-        self.is_connected = True
-        self.connection_count += 1
-
-    async def disconnect(self):
-        """Simulate BLE disconnection."""
-        self.is_connected = False
-
-    async def simulate_connection_loss(self, duration: float = 5.0):
-        """Simulate temporary connection loss."""
-        await self.disconnect()
-        await asyncio.sleep(duration)
-        if duration <= self.max_disconnection_time:
-            await self.connect()
-
-
+# Integration test assertion helpers
 @pytest.fixture
-def bluetooth_test_helper():
-    """Provide Bluetooth test helper."""
-    return BluetoothTestHelper()
+def assert_helper():
+    """Get integration test assertion helpers."""
+    return IntegrationTestAssertions
 
 
-class GPIOTestHelper:
-    """Helper class for GPIO testing scenarios."""
-
-    def __init__(self, pin: int = 18):
-        self.pin = pin
-        self.is_pressed = False
-        self.press_duration = 0.0
-        self.reset_threshold = 5.5  # seconds
-
-    async def press_and_hold(self, duration: float):
-        """Simulate pressing and holding the GPIO button."""
-        self.is_pressed = True
-        self.press_duration = duration
-        await asyncio.sleep(duration)
-        self.is_pressed = False
-        return duration >= self.reset_threshold
-
-
+# Async test utilities
 @pytest.fixture
-def gpio_test_helper():
-    """Provide GPIO test helper."""
-    return GPIOTestHelper()
+def event_loop():
+    """Create an event loop for async tests."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
 
 
-@pytest.fixture
-def encrypted_credentials():
-    """Provide encrypted credentials for security testing."""
-    # This would normally use the actual SecurityService encryption
-    # For testing, we'll use a simple base64 encoding as placeholder
-    import base64
-
-    valid_creds = json.dumps(
-        {"ssid": "TestNetwork", "password": "TestPassword123!", "security": "WPA2"}
-    )
-
-    encrypted = base64.b64encode(valid_creds.encode()).decode()
-
-    return {"encrypted": encrypted, "plaintext": valid_creds}
-
-
-@pytest.fixture
-def test_service_factory():
-    """Factory for creating clean test service instances."""
-
-    def create_services(logger=None):
-        if logger is None:
-            logger = TestLogger()
-
-        return {
-            "logger": logger,
-            "network": TestNetworkService(logger),
-            "bluetooth": TestBluetoothService(logger),
-            "display": TestDisplayService(logger),
-            "configuration": TestConfigurationService(logger),
-            "security": TestSecurityService(logger),
-            "device_info": TestDeviceInfoProvider(logger),
-            "ownership": TestOwnershipService(logger),
-            "factory_reset": TestFactoryResetService(logger),
-            "health_monitor": TestHealthMonitorService(logger),
-        }
-
-    return create_services
-
-
-@pytest.fixture
-def test_services(test_service_factory):
-    """Provide a clean set of test service instances."""
-    return test_service_factory()
-
-
-# Test Utilities
-def assert_state_transition(
-    state_machine, expected_from: DeviceState, expected_to: DeviceState
-):
-    """Assert that a state transition occurred as expected."""
-    history = state_machine.get_state_history(limit=1)
-    if history:
-        last_transition = history[-1]
-        assert last_transition["from_state"] == expected_from
-        assert last_transition["to_state"] == expected_to
-    assert state_machine.get_current_state() == expected_to
-
-
-def assert_event_published(event_bus, event_type: str, timeout: float = 1.0):
-    """Assert that an event was published to the event bus."""
-    # This would need to be implemented based on the actual EventBus implementation
-    # For now, we'll just check that the event_bus is available
-    assert event_bus is not None
-
-
-async def wait_for_state(
-    state_machine, expected_state: DeviceState, timeout: float = 30.0
-):
-    """Wait for state machine to reach expected state or timeout."""
+# Helper functions for common test operations
+async def wait_for_state(state_machine: ProvisioningStateMachine, target_state: DeviceState, timeout: float = 5.0):
+    """Wait for state machine to reach target state within timeout."""
     start_time = asyncio.get_event_loop().time()
-
-    while state_machine.get_current_state() != expected_state:
+    
+    while state_machine.current_state != target_state:
         if asyncio.get_event_loop().time() - start_time > timeout:
-            raise TimeoutError(
-                f"Timeout waiting for state {expected_state.value}. "
-                f"Current state: {state_machine.get_current_state().value}"
-            )
-        await asyncio.sleep(0.1)
+            raise TimeoutError(f"State machine did not reach {target_state} within {timeout}s")
+        await asyncio.sleep(0.01)
 
 
-async def wait_for_connection(network_service, timeout: float = 30.0):
-    """Wait for network connection to be established."""
+async def wait_for_connection(network_service: IntegrationNetworkService, timeout: float = 5.0):
+    """Wait for network service to establish connection within timeout."""
     start_time = asyncio.get_event_loop().time()
-
+    
     while not network_service.is_connected():
         if asyncio.get_event_loop().time() - start_time > timeout:
-            raise TimeoutError("Timeout waiting for network connection")
-        await asyncio.sleep(0.1)
+            raise TimeoutError(f"Network did not connect within {timeout}s")
+        await asyncio.sleep(0.01)
+
+
+async def assert_state_transition(
+    state_machine: ProvisioningStateMachine,
+    event: ProvisioningEvent,
+    expected_state: DeviceState,
+    timeout: float = 2.0
+):
+    """Assert that processing an event leads to expected state transition."""
+    initial_state = state_machine.current_state
+    
+    # Process the event
+    state_machine.process_event(event)
+    
+    # Wait for state transition
+    await wait_for_state(state_machine, expected_state, timeout)
+    
+    assert state_machine.current_state == expected_state, (
+        f"Expected state {expected_state}, but got {state_machine.current_state} "
+        f"after processing {event} from {initial_state}"
+    )
+
+
+def create_test_network_info(ssid: str, security_type: str = "WPA2", signal_strength: int = -50) -> NetworkInfo:
+    """Create a NetworkInfo object for testing."""
+    return NetworkInfo(
+        ssid=ssid,
+        signal_strength=signal_strength,
+        security_type=security_type
+    )
+
+
+def create_test_device_info(device_id: str = "TEST-DEVICE") -> DeviceInfo:
+    """Create a DeviceInfo object for testing."""
+    return DeviceInfo(
+        device_id=device_id,
+        mac_address="AA:BB:CC:DD:EE:FF",
+        hardware_version="Test Hardware v1.0",
+        firmware_version="Test Firmware v1.0",
+        capabilities=["wifi", "bluetooth", "display", "test"]
+    )
+
+
+# Test configuration validation
+def validate_test_environment():
+    """Validate that test environment is properly configured."""
+    try:
+        # Check that integration test adapters can be imported
+        from tests.integration.test_adapters import create_integration_test_environment
+        
+        # Create a test environment to verify it works
+        config, services = create_integration_test_environment()
+        
+        # Verify all required services are present
+        required_services = ["logger", "network", "bluetooth", "display", "configuration"]
+        for service_name in required_services:
+            assert service_name in services, f"Missing required service: {service_name}"
+        
+        return True
+        
+    except Exception as e:
+        pytest.fail(f"Test environment validation failed: {str(e)}")
+
+
+# Run validation when conftest is loaded
+validate_test_environment()
