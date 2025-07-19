@@ -18,6 +18,7 @@ from ..common.result_handling import Result
 from ..domain.configuration import DisplayConfig
 from ..domain.errors import DisplayError, ErrorCode, ErrorSeverity
 from ..interfaces import IDisplayService, ILogger
+from .display.qr_generator import QRCodeGenerator
 
 # Try to import QR code and PIL libraries
 try:
@@ -47,6 +48,9 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
         # Resource management
         self._resource_manager = ResourceManager(logger)
         self._temp_files: list = []
+        
+        # QR code generator
+        self.qr_generator = QRCodeGenerator(logger)
 
         if not QR_AVAILABLE:
             if self.logger:
@@ -67,7 +71,8 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
         self._cleanup_resources()
 
     @with_error_handling("show_qr_code")
-    def show_qr_code(self, data: str) -> Result[bool, Exception]:
+    def show_qr_code(self, data: str, enable_serial_output: bool = True, 
+                     serial_format: str = "json") -> Result[bool, Exception]:
         """Display QR code with enhanced error handling and resource management"""
         with operation_context("show_qr_code", self.logger, data_length=len(data)):
             try:
@@ -75,6 +80,17 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
 
                 if self.logger:
                     self.logger.info("Generating and displaying QR code")
+
+                # Generate QR code data using the new generator
+                qr_result = self.qr_generator.generate_qr_code_data(data)
+                if not qr_result.is_success():
+                    return Result.failure(qr_result.error)
+                
+                # Output QR code information to serial if enabled
+                if enable_serial_output:
+                    serial_result = self.qr_generator.output_qr_to_serial(data, serial_format)
+                    if not serial_result.is_success() and self.logger:
+                        self.logger.warning(f"Serial output failed: {serial_result.error}")
 
                 if not QR_AVAILABLE:
                     if self.logger:
@@ -86,20 +102,20 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
                         True, "show_qr_code", simulated=True
                     )
 
+                # Get the generated QR image
+                qr_img = self.qr_generator.get_qr_image()
+                if not qr_img:
+                    return self._create_error_result(
+                        DisplayError(
+                            message="Failed to generate QR code image",
+                            error_code=ErrorCode.DISPLAY_ERROR,
+                            severity=ErrorSeverity.HIGH,
+                        ),
+                        "show_qr_code"
+                    )
+
                 # Generate QR code with resource tracking
                 with self._resource_manager:
-                    qr = qrcode.QRCode(
-                        version=1,
-                        error_correction=qrcode.constants.ERROR_CORRECT_L,
-                        box_size=10,
-                        border=4,
-                    )
-                    qr.add_data(data)
-                    qr.make(fit=True)
-
-                    # Create QR code image
-                    qr_img = qr.make_image(fill_color="black", back_color="white")
-
                     # Create full display image
                     display_img = self._create_display_image(qr_img, data)
 
@@ -116,6 +132,7 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
                             "show_qr_code",
                             image_path=image_path,
                             qr_data_length=len(data),
+                            serial_output_enabled=enable_serial_output,
                         )
                     else:
                         return self._create_error_result(
@@ -215,139 +232,12 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
         # Get optimal display size
         width, height, _ = self.optimal_resolution
 
-        # Create base image with optimal resolution
-        img = Image.new("RGB", (width, height), self.config.background_color)
-        draw = ImageDraw.Draw(img)
-
-        # Calculate optimal QR code size based on resolution
-        if self.is_4k_capable and width >= 3840:
-            qr_size = getattr(self.config, "qr_code_size_4k", 800)
-            title_font_size = 48
-            text_font_size = 32
-        else:
-            qr_size = getattr(self.config, "qr_code_size_1080p", 400)
-            title_font_size = 32
-            text_font_size = 24
-
-        # Use fallback if config doesn't have the new attributes
-        if not hasattr(self.config, "qr_code_size_4k"):
-            qr_size = self.config.qr_size
-
-        # Resize QR code for optimal viewing
-        qr_resized = qr_img.resize((qr_size, qr_size), Image.Resampling.NEAREST)
-
-        # Calculate positions for centering
-        qr_x = (width - qr_size) // 2
-        qr_y = (height - qr_size) // 2 - 50  # Offset up for text below
-
-        # Paste QR code
-        img.paste(qr_resized, (qr_x, qr_y))
-
-        # Add title and instructions with resolution-appropriate fonts
-        try:
-            # Try to load appropriate fonts for different resolutions
-            try:
-                title_font = ImageFont.truetype(
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                    title_font_size,
-                )
-                text_font = ImageFont.truetype(
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", text_font_size
-                )
-            except OSError:
-                # Fallback to default font
-                title_font = ImageFont.load_default()
-                text_font = ImageFont.load_default()
-
-            # Title
-            title_text = "ROCK Pi 4B+ Setup"
-            title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
-            title_width = title_bbox[2] - title_bbox[0]
-            title_x = (width - title_width) // 2
-            title_y = qr_y - title_font_size - 20
-
-            draw.text(
-                (title_x, title_y),
-                title_text,
-                font=title_font,
-                fill=self.config.text_color,
-            )
-
-            # Instructions
-            instructions = [
-                "1. Scan QR code with your mobile device",
-                "2. Connect to WiFi network",
-                "3. Complete device setup",
-                f"Device ID: {data.split(':')[1] if ':' in data else 'Unknown'}",
-            ]
-
-            text_y = qr_y + qr_size + 20
-            for instruction in instructions:
-                text_bbox = draw.textbbox((0, 0), instruction, font=text_font)
-                text_width = text_bbox[2] - text_bbox[0]
-                text_x = (width - text_width) // 2
-
-                draw.text(
-                    (text_x, text_y),
-                    instruction,
-                    font=text_font,
-                    fill=self.config.text_color,
-                )
-                text_y += text_font_size + 10
-
-        except Exception as e:
-            if self.logger:
-                self.logger.warning(f"Font rendering failed, using basic text: {e}")
-
-        return img
-
-        # Resize QR code
-        qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
-
-        # Center QR code
-        qr_x = (width - qr_size) // 2
-        qr_y = (height - qr_size) // 2 - 50
-
-        img.paste(qr_img, (qr_x, qr_y))
-
-        # Add title text with optimal font size
-        try:
-            title_font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", title_font_size
-            )
-        except:
-            title_font = ImageFont.load_default()
-
-        # Enhanced title for ROCK Pi 4B+
-        title = "ROCK Pi 4B+ Setup"
-        title_bbox = draw.textbbox((0, 0), title, font=title_font)
-        title_width = title_bbox[2] - title_bbox[0]
-        title_x = (width - title_width) // 2
-        title_y = qr_y - 80
-
-        draw.text(
-            (title_x, title_y), title, fill=self.config.text_color, font=title_font
+        # Use the QR generator to create the display image
+        return self.qr_generator.create_display_image(
+            qr_img, data, width, height, self.config.background_color
         )
 
-        # Add instruction text
-        try:
-            font_small = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", text_font_size
-            )
-        except:
-            font_small = ImageFont.load_default()
 
-        instruction = "Scan QR code with mobile app to configure WiFi"
-        inst_bbox = draw.textbbox((0, 0), instruction, font=font_small)
-        inst_width = inst_bbox[2] - inst_bbox[0]
-        inst_x = (width - inst_width) // 2
-        inst_y = qr_y + qr_size + 30
-
-        draw.text(
-            (inst_x, inst_y), instruction, fill=self.config.text_color, font=font_small
-        )
-
-        return img
 
     def _create_status_image(self, message: str) -> "Image.Image":
         """Create status display image"""
@@ -600,3 +490,42 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
 
             except Exception as e:
                 return self._create_error_result(e, "stop_display")
+
+    def get_current_qr_code_info(self) -> Optional[dict]:
+        """Get information about the currently displayed QR code for testing"""
+        if not self.qr_generator:
+            return None
+        
+        data = self.qr_generator.get_qr_data()
+        if not data:
+            return None
+        
+        # Generate QR info without actually displaying
+        qr_result = self.qr_generator.generate_qr_code_data(data)
+        if qr_result.is_success():
+            return qr_result.value
+        return None
+
+    def output_qr_to_serial(self, format: str = "json") -> Result[bool, Exception]:
+        """Output current QR code information to serial for testing"""
+        try:
+            data = self.qr_generator.get_qr_data() if self.qr_generator else None
+            if not data:
+                return Result.failure(
+                    DisplayError(
+                        message="No QR code data available",
+                        error_code=ErrorCode.DISPLAY_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                    )
+                )
+            
+            return self.qr_generator.output_qr_to_serial(data, format)
+            
+        except Exception as e:
+            return Result.failure(
+                DisplayError(
+                    message=f"Serial output failed: {e}",
+                    error_code=ErrorCode.DISPLAY_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                )
+            )
