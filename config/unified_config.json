@@ -1,8 +1,45 @@
 {
     "_comment": "ROCK Pi 4B+ Optimized Configuration for Radxa Debian 11",
     "_usage": "Copy this file to /etc/rock-provisioning/config.json or ~/.config/rock-provisioning/config.json",
-    "version": "2.1",
-    "last_updated": "2025-07-16T00:00:00Z",
+    "_security_notice": "Sensitive values should be set via environment variables or encrypted configuration files",
+    "version": "2.2",
+    "last_updated": "2025-01-21T00:00:00Z",
+    "security": {
+        "config_validation": {
+            "enabled": true,
+            "strict_mode": true,
+            "validate_permissions": true,
+            "required_file_mode": "0600"
+        },
+        "encryption": {
+            "config_encryption_enabled": false,
+            "credential_encryption_required": true,
+            "use_hardware_security": true,
+            "key_derivation_iterations": 100000
+        },
+        "authentication": {
+            "session_timeout_minutes": 5,
+            "max_failed_attempts": 3,
+            "rate_limit_window_seconds": 60,
+            "require_device_authentication": true
+        },
+        "network_security": {
+            "validate_certificates": true,
+            "min_tls_version": "1.2",
+            "allowed_cipher_suites": ["ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"],
+            "certificate_pinning": false
+        }
+    },
+    "timeouts": {
+        "network_scan_timeout": 30.0,
+        "connection_timeout": 60.0,
+        "health_check_timeout": 10.0,
+        "ble_advertising_timeout": 600,
+        "ble_connection_timeout": 30,
+        "max_retries": 3,
+        "base_retry_delay": 2.0,
+        "max_retry_delay": 30.0
+    },
     "hardware": {
         "platform": "rock-pi-4b-plus",
         "soc": "op1",
@@ -59,160 +96,6 @@
             "suspicious_pattern_detection": true,
             "client_authentication_required": true,
             "payload_size_limit": 512
-        }
-    },
-    "security": {
-        "encryption_algorithm": "Fernet",
-        "key_derivation_iterations": 600000,
-        "credential_timeout": 300,
-        "require_owner_setup": true,
-        "owner_setup_timeout": 600,
-        "owner_pin_length": 6,
-        "max_owner_setup_attempts": 3,
-        "owner_lockout_duration": 3600,
-        "enforce_https_only": true,
-        "session_token_rotation": true,
-        "enable_audit_logging": true,
-        "max_concurrent_sessions": 5,
-        "enhanced_security": true,
-        "use_hardware_security": true,
-        "strict_validation": true,
-        "rate_limiting_enabled": true,
-        "cryptography": {
-            "master_key_lifetime_days": 30,
-            "session_key_lifetime_minutes": 15,
-            "device_key_lifetime_days": 90,
-            "pbkdf2_iterations_master": 600000,
-            "pbkdf2_iterations_session": 200000,
-            "use_hardware_rng": true,
-            "secure_memory_wiping": true,
-            "key_rotation_automation": true,
-            "min_key_size_bits": 256,
-            "require_hardware_rng": true,
-            "max_key_age_days": 30,
-            "quantum_resistant_algorithms": true,
-            "secure_key_storage": true
-        },
-        "authentication": {
-            "max_failed_attempts": 3,
-            "lockout_duration_seconds": 3600,
-            "session_timeout_minutes": 15,
-            "owner_pin_complexity_required": true,
-            "exponential_backoff": true
-        },
-        "input_validation": {
-            "strict_mode": true,
-            "password_min_length": 12,
-            "password_require_complexity": true,
-            "password_min_entropy": 3.5,
-            "ssid_security_validation": true,
-            "sanitize_logs": true
-        },
-        "session_management": {
-            "max_sessions_per_client": 2,
-            "suspicious_activity_threshold": 5,
-            "rate_limit_window_seconds": 30,
-            "token_rotation_enabled": true,
-            "secure_session_storage": true,
-            "max_lifetime_minutes": 15,
-            "require_rotation": true,
-            "idle_timeout_minutes": 5,
-            "secure_transport_only": true
-        },
-        "policies": {
-            "password_policy": {
-                "min_length": 12,
-                "require_uppercase": true,
-                "require_lowercase": true,
-                "require_digits": true,
-                "require_special_chars": true,
-                "forbidden_patterns": [
-                    "password", "123456", "qwerty", "admin", "root", "guest", "test"
-                ],
-                "max_age_days": 90,
-                "prevent_reuse": true
-            },
-            "pin_policy": {
-                "min_length": 6,
-                "max_length": 12,
-                "forbidden_patterns": [
-                    "1234", "0000", "1111", "2222", "3333", "4444",
-                    "5555", "6666", "7777", "8888", "9999"
-                ],
-                "prevent_sequences": true,
-                "prevent_keyboard_patterns": true,
-                "prevent_date_patterns": true
-            },
-            "network_policy": {
-                "require_wpa3": false,
-                "minimum_wpa2": true,
-                "block_open_networks": false,
-                "validate_certificates": true,
-                "secure_protocols_only": true,
-                "ssid_security_validation": true,
-                "insecure_network_warnings": true,
-                "configuration_encryption": true,
-                "backup_encryption": true
-            }
-        },
-        "audit_logging": {
-            "enabled": true,
-            "integrity_hashing": true,
-            "sensitive_data_sanitization": true,
-            "max_events": 10000,
-            "retention_days": 365,
-            "real_time_monitoring": true,
-            "anomaly_detection": true,
-            "log_all_authentication": true,
-            "log_all_authorization": true,
-            "log_all_data_access": true,
-            "log_configuration_changes": true,
-            "require_integrity_hashes": true,
-            "real_time_alerting": true
-        },
-        "compliance": {
-            "enforce_security_policies": true,
-            "regular_compliance_checks": true,
-            "violation_reporting": true,
-            "security_score_monitoring": true
-        },
-        "factory_reset": {
-            "rate_limiting": true,
-            "max_attempts_per_hour": 3,
-            "audit_logging": true,
-            "secure_data_wiping": true,
-            "authentication_required": true
-        },
-        "monitoring": {
-            "security_metrics_tracking": true,
-            "trend_analysis": true,
-            "alerting_enabled": true,
-            "dashboard_integration": true
-        },
-        "thresholds": {
-            "authentication_failure_rate": 0.3,
-            "security_violation_limit": 10,
-            "key_rotation_days": 30,
-            "session_anomaly_threshold": 5,
-            "ble_connection_rate": 10,
-            "minimum_security_score": 70
-        },
-        "emergency_procedures": {
-            "auto_lockdown_enabled": true,
-            "lockdown_triggers": [
-                "excessive_failed_logins",
-                "security_violations",
-                "anomaly_detection"
-            ],
-            "emergency_contacts": [],
-            "incident_response_automation": true
-        },
-        "hardware_security": {
-            "use_tpm_if_available": true,
-            "use_secure_enclave": true,
-            "hardware_entropy": true,
-            "secure_boot_validation": false,
-            "memory_protection": true
         }
     },
     "display": {

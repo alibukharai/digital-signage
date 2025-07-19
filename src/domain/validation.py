@@ -33,37 +33,42 @@ class ValidationService(IValidationService):
         elif len(ssid) < 1:
             errors.append("SSID must be at least 1 character")
 
-        # Enhanced SSID security validation
+        # Enhanced SSID security validation with whitelist approach
         if ssid:
-            # Check for control characters that could cause injection issues
-            if re.search(r"[\x00-\x1F\x7F]", ssid):
+            # Implement whitelist-based validation instead of blacklist
+            # Only allow alphanumeric characters, spaces, hyphens, underscores, and dots
+            allowed_pattern = r"^[a-zA-Z0-9\s._-]+$"
+            if not re.match(allowed_pattern, ssid):
+                errors.append("SSID contains invalid characters. Only letters, numbers, spaces, dots, hyphens, and underscores are allowed")
+            
+            # Additional length and format checks
+            if len(ssid.strip()) != len(ssid):
+                errors.append("SSID cannot start or end with whitespace")
+            
+            if '..' in ssid or '--' in ssid or '__' in ssid:
+                errors.append("SSID cannot contain consecutive special characters")
+            
+            # Check for control characters (comprehensive)
+            if any(ord(char) < 32 or ord(char) == 127 for char in ssid):
                 errors.append("SSID contains control characters")
-
-            # Check for SQL injection patterns
-            sql_patterns = [
-                r"['\"`;]",  # SQL injection quotes and terminators
-                r"\b(union|select|insert|update|delete|drop|exec)\b",  # SQL keywords
-                r"--\s*",  # SQL comments
-                r"/\*.*\*/",  # SQL block comments
+            
+            # Check for non-printable characters
+            if any(not char.isprintable() for char in ssid):
+                errors.append("SSID contains non-printable characters")
+            
+            # Prevent homograph attacks (basic check)
+            suspicious_unicode = [
+                '\u200B',  # Zero width space
+                '\u200C',  # Zero width non-joiner
+                '\u200D',  # Zero width joiner
+                '\uFEFF',  # Zero width no-break space
             ]
-            for pattern in sql_patterns:
-                if re.search(pattern, ssid, re.IGNORECASE):
-                    errors.append("SSID contains potentially dangerous SQL patterns")
-                    break
-
-            # Check for shell injection patterns
-            shell_patterns = [
-                r"[;&|`$()]",  # Shell metacharacters
-                r"\$\(",  # Command substitution
-                r"`.*`",  # Backtick command substitution
-                r"\\x[0-9a-fA-F]{2}",  # Hex escape sequences
-            ]
-            for pattern in shell_patterns:
-                if re.search(pattern, ssid):
-                    errors.append(
-                        "SSID contains potentially dangerous shell characters"
-                    )
-                    break
+            if any(char in ssid for char in suspicious_unicode):
+                errors.append("SSID contains suspicious Unicode characters")
+            
+            # Additional security patterns (still check these but with better context)
+            if self._contains_injection_patterns(ssid):
+                errors.append("SSID contains potentially malicious patterns")
 
             # Check for network configuration injection patterns
             network_patterns = [
@@ -407,3 +412,53 @@ class ValidationService(IValidationService):
         """Validate complete network credentials"""
         is_valid, _ = self.validate_wifi_credentials(ssid, password)
         return is_valid
+    
+    def _contains_injection_patterns(self, text: str) -> bool:
+        """Check for various injection attack patterns"""
+        try:
+            # SQL injection patterns
+            sql_patterns = [
+                r"['\"`;]",  # SQL injection quotes and terminators
+                r"\b(union|select|insert|update|delete|drop|exec|alter|create)\b",  # SQL keywords
+                r"--\s*",  # SQL comments
+                r"/\*.*\*/",  # SQL block comments
+                r"\|\|",  # SQL concatenation
+            ]
+            
+            # Command injection patterns
+            command_patterns = [
+                r"[;&|`$()]",  # Shell metacharacters
+                r"\$\(",  # Command substitution
+                r"`.*`",  # Backtick command substitution
+                r"\\x[0-9a-fA-F]{2}",  # Hex escape sequences
+                r"\$\{.*\}",  # Variable expansion
+                r"&&|\|\|",  # Command chaining
+            ]
+            
+            # LDAP injection patterns
+            ldap_patterns = [
+                r"[()&|!]",  # LDAP special characters
+                r"\*",  # LDAP wildcards
+            ]
+            
+            # XSS patterns (for completeness)
+            xss_patterns = [
+                r"<script",  # Script tags
+                r"javascript:",  # JavaScript protocol
+                r"on\w+\s*=",  # Event handlers
+            ]
+            
+            all_patterns = sql_patterns + command_patterns + ldap_patterns + xss_patterns
+            
+            for pattern in all_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    if self.logger:
+                        self.logger.warning(f"Injection pattern detected: {pattern}")
+                    return True
+                    
+            return False
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error checking injection patterns: {e}")
+            return True  # Assume malicious if check fails

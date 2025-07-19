@@ -1,26 +1,80 @@
 """
-Encryption and cryptographic operations
+Encryption and cryptographic operations with enhanced security
 """
 
 import base64
 import hashlib
+import mmap
+import os
 import secrets
-from typing import Optional
+import sys
+from typing import Optional, Union
+import gc
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from ...common.result_handling import Result
 from ...domain.errors import ErrorCode, ErrorSeverity, SecurityError
 from ...interfaces import ILogger
 
 
+class SecureMemory:
+    """Secure memory handling for sensitive data"""
+    
+    def __init__(self, data: Union[str, bytes]):
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        self._size = len(data)
+        # Use mmap for secure memory allocation when possible
+        try:
+            self._memory = mmap.mmap(-1, self._size)
+            self._memory.write(data)
+            self._memory.seek(0)
+        except OSError:
+            # Fallback to bytearray if mmap fails
+            self._memory = bytearray(data)
+    
+    def get_data(self) -> bytes:
+        """Get data from secure memory"""
+        if hasattr(self._memory, 'read'):
+            self._memory.seek(0)
+            return self._memory.read()
+        return bytes(self._memory)
+    
+    def clear(self):
+        """Securely clear memory"""
+        try:
+            if hasattr(self._memory, 'write'):
+                self._memory.seek(0)
+                self._memory.write(b'\x00' * self._size)
+            else:
+                for i in range(len(self._memory)):
+                    self._memory[i] = 0
+        except Exception:
+            pass
+        finally:
+            if hasattr(self._memory, 'close'):
+                self._memory.close()
+            # Force garbage collection
+            gc.collect()
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.clear()
+
+
 class EncryptionManager:
-    """Handles all encryption and cryptographic operations"""
+    """Handles all encryption and cryptographic operations with enhanced security"""
 
     def __init__(self, logger: Optional[ILogger] = None):
         self.logger = logger
+        # Use ChaCha20-Poly1305 for better security than Fernet
+        self._cipher = ChaCha20Poly1305(ChaCha20Poly1305.generate_key())
 
     def encrypt_data(self, data: str, key: bytes) -> Result[bytes, Exception]:
         """Encrypt data using Fernet encryption"""
@@ -256,27 +310,90 @@ class EncryptionManager:
             return False
 
     def _detect_plaintext_credentials(self, data: str) -> bool:
-        """Detect if data contains plaintext credentials"""
+        """Enhanced detection of plaintext credentials using multiple methods"""
         try:
-            # Check for common credential patterns
-            suspicious_patterns = [
-                "password=",
-                "pwd=",
-                "secret=",
-                "token=",
-                "key=",
-                "auth=",
-                "credential",
+            if not data or not isinstance(data, str):
+                return False
+                
+            data_lower = data.lower()
+            
+            # Enhanced pattern matching with more comprehensive patterns
+            credential_patterns = [
+                # Direct credential indicators
+                r"password\s*[:=]\s*['\"]?[^'\">\s]{3,}",
+                r"passwd\s*[:=]\s*['\"]?[^'\">\s]{3,}",
+                r"pwd\s*[:=]\s*['\"]?[^'\">\s]{3,}",
+                r"secret\s*[:=]\s*['\"]?[^'\">\s]{8,}",
+                r"token\s*[:=]\s*['\"]?[^'\">\s]{8,}",
+                r"api_?key\s*[:=]\s*['\"]?[^'\">\s]{8,}",
+                r"private_?key\s*[:=]",
+                r"auth\w*\s*[:=]\s*['\"]?[^'\">\s]{8,}",
+                
+                # Common credential formats
+                r"[a-zA-Z0-9+/]{20,}={0,2}",  # Base64-like patterns
+                r"[0-9a-fA-F]{32,}",  # Hex patterns (hashes, keys)
+                r"-----BEGIN\s+(PRIVATE\s+KEY|RSA\s+PRIVATE\s+KEY)",  # PEM keys
+                
+                # Database connection strings
+                r"(mysql|postgres|mongodb)://[^@]+:[^@]+@",
+                r"jdbc:[^:]+://[^:]+:[^@]+@",
+                
+                # Cloud service patterns
+                r"AKIA[0-9A-Z]{16}",  # AWS access keys
+                r"sk_live_[0-9a-zA-Z]{24}",  # Stripe keys
+                r"xox[baprs]-[0-9a-zA-Z-]{10,}",  # Slack tokens
             ]
             
-            data_lower = data.lower()
-            for pattern in suspicious_patterns:
-                if pattern in data_lower:
+            import re
+            for pattern in credential_patterns:
+                if re.search(pattern, data, re.IGNORECASE | re.MULTILINE):
+                    if self.logger:
+                        self.logger.warning(f"Potential credential pattern detected: {pattern[:20]}...")
+                    return True
+            
+            # Entropy analysis for random-looking strings
+            if self._has_high_entropy(data):
+                if self.logger:
+                    self.logger.warning("High entropy content detected - possible credential")
+                return True
+            
+            # Check for common weak passwords in plaintext
+            weak_passwords = {
+                'password', 'password123', '123456', 'admin', 'root', 'guest',
+                'qwerty', 'abc123', 'welcome', 'letmein', 'monkey', 'dragon'
+            }
+            
+            words = re.findall(r'\b\w+\b', data_lower)
+            for word in words:
+                if word in weak_passwords:
+                    if self.logger:
+                        self.logger.warning(f"Weak password detected: {word}")
                     return True
                     
             return False
 
-        except (AttributeError, TypeError):
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in credential detection: {e}")
+            return True  # Assume credentials present if detection fails
+    
+    def _has_high_entropy(self, data: str, threshold: float = 4.5) -> bool:
+        """Check if string has high entropy (possibly encrypted/encoded content)"""
+        try:
+            if len(data) < 10:  # Too short to be meaningful
+                return False
+                
+            import math
+            from collections import Counter
+            
+            # Calculate Shannon entropy
+            counter = Counter(data)
+            length = len(data)
+            entropy = -sum((count / length) * math.log2(count / length) 
+                          for count in counter.values())
+            
+            return entropy > threshold
+        except Exception:
             return False
 
     def _detect_key_compromise(self, key: bytes) -> bool:

@@ -1,12 +1,15 @@
 """
-Bluetooth advertising and connection management
+Bluetooth advertising and connection management with enhanced security
 """
 
 import asyncio
+import hashlib
 import json
 import random
+import secrets
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
+import hmac
 
 from ...common.result_handling import Result
 from ...domain.errors import BLEError, ErrorCode, ErrorSeverity
@@ -17,12 +20,130 @@ if BLEAK_AVAILABLE:
     from bleak import BleakAdapter, BleakPeripheral
 
 
+class BluetoothSecurityManager:
+    """Handles BLE security, authentication, and session management"""
+    
+    def __init__(self, logger: Optional[ILogger] = None):
+        self.logger = logger
+        self._session_keys: Dict[str, bytes] = {}
+        self._authenticated_devices: Set[str] = set()
+        self._session_timeouts: Dict[str, float] = {}
+        self._failed_attempts: Dict[str, int] = {}
+        self._rate_limit_reset: Dict[str, float] = {}
+        
+        # Security configuration
+        self.max_failed_attempts = 3
+        self.session_timeout = 300  # 5 minutes
+        self.rate_limit_window = 60  # 1 minute
+        self.challenge_length = 32
+    
+    def generate_session_key(self, device_id: str) -> bytes:
+        """Generate a secure session key for device authentication"""
+        session_key = secrets.token_bytes(32)
+        self._session_keys[device_id] = session_key
+        self._session_timeouts[device_id] = time.time() + self.session_timeout
+        return session_key
+    
+    def create_challenge(self) -> bytes:
+        """Create a cryptographic challenge for device authentication"""
+        return secrets.token_bytes(self.challenge_length)
+    
+    def verify_challenge_response(self, device_id: str, challenge: bytes, response: bytes) -> bool:
+        """Verify challenge response using HMAC"""
+        if device_id not in self._session_keys:
+            return False
+            
+        expected_response = hmac.new(
+            self._session_keys[device_id],
+            challenge,
+            hashlib.sha256
+        ).digest()
+        
+        return hmac.compare_digest(expected_response, response)
+    
+    def is_device_authenticated(self, device_id: str) -> bool:
+        """Check if device is authenticated and session is valid"""
+        if device_id not in self._authenticated_devices:
+            return False
+            
+        # Check session timeout
+        if device_id in self._session_timeouts:
+            if time.time() > self._session_timeouts[device_id]:
+                self.revoke_authentication(device_id)
+                return False
+                
+        return True
+    
+    def authenticate_device(self, device_id: str) -> bool:
+        """Mark device as authenticated"""
+        if self._check_rate_limit(device_id):
+            self._authenticated_devices.add(device_id)
+            self._session_timeouts[device_id] = time.time() + self.session_timeout
+            # Reset failed attempts on successful auth
+            if device_id in self._failed_attempts:
+                del self._failed_attempts[device_id]
+            return True
+        return False
+    
+    def revoke_authentication(self, device_id: str):
+        """Revoke device authentication"""
+        self._authenticated_devices.discard(device_id)
+        if device_id in self._session_keys:
+            del self._session_keys[device_id]
+        if device_id in self._session_timeouts:
+            del self._session_timeouts[device_id]
+    
+    def record_failed_attempt(self, device_id: str):
+        """Record failed authentication attempt"""
+        self._failed_attempts[device_id] = self._failed_attempts.get(device_id, 0) + 1
+        if self._failed_attempts[device_id] >= self.max_failed_attempts:
+            # Rate limit the device
+            self._rate_limit_reset[device_id] = time.time() + self.rate_limit_window
+    
+    def _check_rate_limit(self, device_id: str) -> bool:
+        """Check if device is rate limited"""
+        if device_id in self._rate_limit_reset:
+            if time.time() < self._rate_limit_reset[device_id]:
+                return False
+            else:
+                # Reset rate limit
+                del self._rate_limit_reset[device_id]
+                if device_id in self._failed_attempts:
+                    del self._failed_attempts[device_id]
+        return True
+    
+    def cleanup_expired_sessions(self):
+        """Clean up expired sessions and rate limits"""
+        current_time = time.time()
+        
+        # Clean up expired sessions
+        expired_sessions = [
+            device_id for device_id, timeout in self._session_timeouts.items()
+            if current_time > timeout
+        ]
+        
+        for device_id in expired_sessions:
+            self.revoke_authentication(device_id)
+        
+        # Clean up expired rate limits
+        expired_rate_limits = [
+            device_id for device_id, reset_time in self._rate_limit_reset.items()
+            if current_time > reset_time
+        ]
+        
+        for device_id in expired_rate_limits:
+            del self._rate_limit_reset[device_id]
+            if device_id in self._failed_attempts:
+                del self._failed_attempts[device_id]
+
+
 class BluetoothAdvertisingManager:
-    """Manages Bluetooth advertising and connection handling"""
+    """Manages Bluetooth advertising and connection handling with enhanced security"""
 
     def __init__(self, parent_service, logger: Optional[ILogger] = None):
         self.parent = parent_service
         self.logger = logger
+        self.security_manager = BluetoothSecurityManager(logger)
 
     async def start_advertising(
         self, device_info: DeviceInfo, timeout: Optional[float] = None
