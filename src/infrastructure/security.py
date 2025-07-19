@@ -112,36 +112,48 @@ class SecurityService(ISecurityService):
 
             return Result.success(encrypted)
 
-        except Exception as e:
-            # Enhanced error handling for encryption operations
-            error_msg = f"Failed to encrypt data: {str(e)}"
-
-            # Log security-relevant errors without exposing sensitive data
+        except ValueError as e:
+            error_msg = "Invalid input data for encryption"
             if self.logger:
-                # Never log the actual data being encrypted
-                error_type = type(e).__name__
-                self.logger.error(
-                    f"Encryption failed - Error type: {error_type}, Key ID: {key_id or 'master'}"
-                )
-
-                # Log additional context for debugging (without sensitive data)
-                if "InvalidToken" in error_type:
-                    self.logger.error(
-                        "Encryption failed: Invalid or corrupted encryption key"
-                    )
-                elif "ValueError" in error_type:
-                    self.logger.error("Encryption failed: Invalid input data format")
-                else:
-                    self.logger.error(
-                        f"Encryption failed: Unexpected error - {error_type}"
-                    )
-
-            # Don't return raw exception details to avoid information leakage
+                self.logger.error(f"Encryption failed: Invalid input data format - {str(e)}")
             return Result.failure(
                 SecurityError(
                     ErrorCode.ENCRYPTION_FAILED,
-                    "Encryption operation failed - check logs for details",
+                    error_msg,
                     ErrorSeverity.CRITICAL,
+                )
+            )
+        except TypeError as e:
+            error_msg = "Invalid data type for encryption"
+            if self.logger:
+                self.logger.error(f"Encryption failed: Invalid data type - {str(e)}")
+            return Result.failure(
+                SecurityError(
+                    ErrorCode.ENCRYPTION_FAILED,
+                    error_msg,
+                    ErrorSeverity.CRITICAL,
+                )
+            )
+        except MemoryError:
+            error_msg = "Insufficient memory for encryption operation"
+            if self.logger:
+                self.logger.error("Encryption failed: Insufficient memory")
+            return Result.failure(
+                SecurityError(
+                    ErrorCode.ENCRYPTION_FAILED,
+                    error_msg,
+                    ErrorSeverity.CRITICAL,
+                )
+            )
+        except OSError as e:
+            error_msg = "System error during encryption"
+            if self.logger:
+                self.logger.error(f"Encryption failed: System error - {str(e)}")
+            return Result.failure(
+                SecurityError(
+                    ErrorCode.ENCRYPTION_FAILED,
+                    error_msg,
+                    ErrorSeverity.HIGH,
                 )
             )
 
