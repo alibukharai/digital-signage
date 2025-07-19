@@ -45,9 +45,11 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
         self.optimal_resolution = self._select_optimal_resolution()
         self.is_4k_capable = self._check_4k_capability()
 
-        # Resource management
+        # Enhanced resource management with context managers
         self._resource_manager = ResourceManager(logger)
         self._temp_files: list = []
+        self._cleanup_callbacks: list = []
+        self._active_contexts: list = []
         
         # QR code generator
         self.qr_generator = QRCodeGenerator(logger)
@@ -447,7 +449,9 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
                 finally:
                     self.current_process = None
 
-            # Clean up temporary files
+            # Clean up temporary files with proper error handling
+            cleanup_errors = []
+            
             for temp_file in self._temp_files:
                 try:
                     if os.path.exists(temp_file):
@@ -455,15 +459,38 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
                         if self.logger:
                             self.logger.debug(f"Removed temporary file: {temp_file}")
                 except OSError as e:
+                    cleanup_errors.append(f"Failed to remove {temp_file}: {e}")
                     if self.logger:
-                        self.logger.warning(
-                            f"Failed to remove temporary file {temp_file}: {e}"
-                        )
+                        self.logger.warning(f"Failed to remove temporary file {temp_file}: {e}")
 
+            # Execute cleanup callbacks
+            for callback in self._cleanup_callbacks:
+                try:
+                    callback()
+                except Exception as e:
+                    cleanup_errors.append(f"Cleanup callback failed: {e}")
+                    if self.logger:
+                        self.logger.warning(f"Cleanup callback failed: {e}")
+
+            # Close active contexts
+            for context in self._active_contexts:
+                try:
+                    if hasattr(context, '__exit__'):
+                        context.__exit__(None, None, None)
+                except Exception as e:
+                    cleanup_errors.append(f"Context cleanup failed: {e}")
+                    if self.logger:
+                        self.logger.warning(f"Context cleanup failed: {e}")
+
+            # Clear all lists
             self._temp_files.clear()
+            self._cleanup_callbacks.clear()
+            self._active_contexts.clear()
             self.is_active = False
 
-            if self.logger:
+            if cleanup_errors and self.logger:
+                self.logger.warning(f"Some cleanup operations failed: {'; '.join(cleanup_errors)}")
+            elif self.logger:
                 self.logger.info("Display resources cleaned up successfully")
 
         except Exception as e:
@@ -529,3 +556,46 @@ class DisplayService(IDisplayService, ErrorHandlingMixin):
                     severity=ErrorSeverity.MEDIUM,
                 )
             )
+    
+    def register_temp_file(self, filepath: str):
+        """Register a temporary file for cleanup"""
+        if filepath not in self._temp_files:
+            self._temp_files.append(filepath)
+    
+    def register_cleanup_callback(self, callback):
+        """Register a cleanup callback to be executed during shutdown"""
+        self._cleanup_callbacks.append(callback)
+    
+    def register_context(self, context):
+        """Register a context manager for cleanup"""
+        self._active_contexts.append(context)
+        
+    def create_temp_file_context(self, filepath: str):
+        """Create a context manager for temporary file handling"""
+        return TempFileContext(filepath, self)
+
+
+class TempFileContext:
+    """Context manager for temporary file cleanup"""
+    
+    def __init__(self, filepath: str, display_service):
+        self.filepath = filepath
+        self.display_service = display_service
+    
+    def __enter__(self):
+        self.display_service.register_temp_file(self.filepath)
+        return self.filepath
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if os.path.exists(self.filepath):
+                os.remove(self.filepath)
+                if self.display_service.logger:
+                    self.display_service.logger.debug(f"Cleaned up temporary file: {self.filepath}")
+        except OSError as e:
+            if self.display_service.logger:
+                self.display_service.logger.warning(f"Failed to clean up temporary file {self.filepath}: {e}")
+        finally:
+            # Remove from tracking list
+            if self.filepath in self.display_service._temp_files:
+                self.display_service._temp_files.remove(self.filepath)

@@ -54,6 +54,14 @@ class BackgroundTaskManager:
         self.task_metrics: Dict[str, TaskMetrics] = {}
         self.is_running = False
         self._health_monitor_task: Optional[asyncio.Task] = None
+        
+        # Add synchronization primitives to prevent race conditions
+        self._task_lock = asyncio.Lock()  # Protects task dictionary operations
+        self._metrics_lock = asyncio.Lock()  # Protects metrics updates
+        self._state_lock = asyncio.Lock()  # Protects manager state changes
+        
+        # Add cancellation event for clean shutdown
+        self._shutdown_event = asyncio.Event()
 
     async def start_task(
         self,
@@ -101,15 +109,24 @@ class BackgroundTaskManager:
             return False
 
     async def _start_task_with_config(self, config: TaskConfig) -> bool:
-        """Start a task with the given configuration"""
+        """Start a task with the given configuration with proper synchronization"""
         try:
-            # Create wrapper task for monitoring and restart capabilities
-            task = asyncio.create_task(self._task_wrapper(config))
-            task.set_name(config.name)
+            # Use locks to prevent race conditions during task creation
+            async with self._task_lock:
+                if config.name in self.tasks:
+                    self.logger.warning(f"Task {config.name} already exists during creation")
+                    return False
+                
+                # Create wrapper task for monitoring and restart capabilities
+                task = asyncio.create_task(self._task_wrapper(config))
+                task.set_name(config.name)
 
-            self.tasks[config.name] = task
-            self.task_configs[config.name] = config
-            self.task_metrics[config.name] = TaskMetrics(start_time=datetime.now())
+                self.tasks[config.name] = task
+                self.task_configs[config.name] = config
+                
+            # Update metrics separately to avoid holding both locks
+            async with self._metrics_lock:
+                self.task_metrics[config.name] = TaskMetrics(start_time=datetime.now())
 
             self.logger.info(
                 f"Started background task: {config.name} (restart_policy: {config.restart_policy})"
@@ -348,52 +365,54 @@ class BackgroundTaskManager:
     async def _check_task_health(
         self, name: str, task: asyncio.Task, current_time: datetime
     ) -> bool:
-        """Check health of a specific task and return health status"""
-        if name not in self.task_metrics or name not in self.task_configs:
-            return False
-
-        metrics = self.task_metrics[name]
-        config = self.task_configs[name]
-
-        # Update last health check time
-        metrics.last_health_check = current_time
-
-        # Check if task has completed unexpectedly
-        if task.done():
-            if task.cancelled():
-                self.logger.debug(f"Task {name} was cancelled")
-                metrics.is_healthy = False
+        """Check health of a specific task and return health status with proper synchronization"""
+        # Use locks to prevent race conditions on shared state
+        async with self._metrics_lock:
+            if name not in self.task_metrics or name not in self.task_configs:
                 return False
-            elif task.exception():
-                exception = task.exception()
-                self.logger.warning(
-                    f"Task {name} completed with exception: {exception}"
-                )
-                metrics.is_healthy = False
-                await self._handle_task_failure(config, "unexpected_completion")
-                return False
-            else:
-                # Task completed normally
-                self.logger.info(f"Task {name} completed normally")
-                metrics.is_healthy = True
-                return True
-        else:
-            # Task is still running - check if it's been running too long
-            if config.max_execution_time:
-                running_time = (current_time - metrics.start_time).total_seconds()
-                if running_time > config.max_execution_time * 1.2:  # 20% grace period
+
+            metrics = self.task_metrics[name]
+            config = self.task_configs[name]
+
+            # Update last health check time atomically
+            metrics.last_health_check = current_time
+
+            # Check if task has completed unexpectedly
+            if task.done():
+                if task.cancelled():
+                    self.logger.debug(f"Task {name} was cancelled")
+                    metrics.is_healthy = False
+                    return False
+                elif task.exception():
+                    exception = task.exception()
                     self.logger.warning(
-                        f"Task {name} has been running for {running_time:.1f}s, "
-                        f"exceeding max time {config.max_execution_time}s"
+                        f"Task {name} completed with exception: {exception}"
                     )
                     metrics.is_healthy = False
-                    # Cancel the long-running task
-                    task.cancel()
+                    await self._handle_task_failure(config, "unexpected_completion")
                     return False
+                else:
+                    # Task completed normally
+                    self.logger.info(f"Task {name} completed normally")
+                    metrics.is_healthy = True
+                    return True
+            else:
+                # Task is still running - check if it's been running too long
+                if config.max_execution_time:
+                    running_time = (current_time - metrics.start_time).total_seconds()
+                    if running_time > config.max_execution_time * 1.2:  # 20% grace period
+                        self.logger.warning(
+                            f"Task {name} has been running for {running_time:.1f}s, "
+                            f"exceeding max time {config.max_execution_time}s"
+                        )
+                        metrics.is_healthy = False
+                        # Cancel the long-running task
+                        task.cancel()
+                        return False
 
-            # Task is still running and healthy
-            metrics.is_healthy = True
-            return True
+                # Task is still running and healthy
+                metrics.is_healthy = True
+                return True
 
     def get_task_status(self) -> Dict[str, Any]:
         """Get detailed status of all tasks including health metrics"""

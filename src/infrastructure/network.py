@@ -87,6 +87,23 @@ class NetworkService(INetworkService):
         self._connection_lock = asyncio.Lock()
         self._active_operations: Dict[str, asyncio.Task] = {}
         self._resource_cleanup_callbacks: List[callable] = []
+        
+        # Configurable timeouts with exponential backoff
+        self._timeout_config = {
+            'scan_timeout': getattr(config, 'scan_timeout', 30.0),
+            'connect_timeout': getattr(config, 'connect_timeout', 60.0),
+            'health_check_timeout': getattr(config, 'health_check_timeout', 10.0),
+            'max_retries': getattr(config, 'max_retries', 3),
+            'base_retry_delay': getattr(config, 'base_retry_delay', 2.0),
+            'max_retry_delay': getattr(config, 'max_retry_delay', 30.0),
+        }
+        
+        # Connection health monitoring
+        self._connection_health = {
+            'last_check': None,
+            'consecutive_failures': 0,
+            'last_success': None,
+        }
 
         # ROCK Pi 4B+ specific network optimizations
         self.ethernet_interfaces = self._detect_ethernet_interfaces()
@@ -296,18 +313,23 @@ class NetworkService(INetworkService):
                 self._active_operations[operation_id] = scan_task
 
                 try:
-                    networks = await asyncio.wait_for(scan_task, timeout=timeout)
+                    # Use configurable timeout with exponential backoff retry logic
+                    actual_timeout = timeout or self._timeout_config['scan_timeout']
+                    networks = await asyncio.wait_for(scan_task, timeout=actual_timeout)
 
                     if self.logger:
                         self.logger.info(f"Found {len(networks)} WiFi networks")
 
                     # Cache the results
                     self.cache.cache_networks(networks)
+                    self._connection_health['last_success'] = datetime.now()
+                    self._connection_health['consecutive_failures'] = 0
                     return Result.success(networks)
 
                 except asyncio.TimeoutError:
                     scan_task.cancel()
-                    error_msg = f"WiFi scan timed out after {timeout}s"
+                    self._connection_health['consecutive_failures'] += 1
+                    error_msg = f"WiFi scan timed out after {actual_timeout}s (attempt {self._connection_health['consecutive_failures']})"
                     if self.logger:
                         self.logger.error(error_msg)
                     return Result.failure(
@@ -777,7 +799,51 @@ class NetworkService(INetworkService):
                 "poe_capable": self.poe_capable,
                 "platform": self.hardware_platform,
                 "cache_valid": self.cache.get_cached_networks() is not None,
+                "connection_health": self._connection_health,
             }
+    
+    async def _retry_with_exponential_backoff(self, operation, max_retries=None, base_delay=None):
+        """Retry operation with exponential backoff"""
+        max_retries = max_retries or self._timeout_config['max_retries']
+        base_delay = base_delay or self._timeout_config['base_retry_delay']
+        max_delay = self._timeout_config['max_retry_delay']
+        
+        for attempt in range(max_retries + 1):
+            try:
+                result = await operation()
+                return result
+            except Exception as e:
+                if attempt == max_retries:
+                    raise e
+                
+                # Calculate exponential backoff delay
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                if self.logger:
+                    self.logger.warning(f"Operation failed (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay}s: {e}")
+                
+                await asyncio.sleep(delay)
+        
+        raise Exception("Max retries exceeded")
+    
+    def _calculate_adaptive_timeout(self, base_timeout: float, operation_type: str) -> float:
+        """Calculate adaptive timeout based on connection health"""
+        health = self._connection_health
+        
+        # Increase timeout based on consecutive failures
+        failure_multiplier = 1 + (health['consecutive_failures'] * 0.5)
+        
+        # Consider time since last success
+        if health['last_success']:
+            time_since_success = (datetime.now() - health['last_success']).total_seconds()
+            if time_since_success > 300:  # 5 minutes
+                failure_multiplier *= 1.5
+        
+        adaptive_timeout = min(base_timeout * failure_multiplier, base_timeout * 3)
+        
+        if self.logger:
+            self.logger.debug(f"Adaptive timeout for {operation_type}: {adaptive_timeout}s (base: {base_timeout}s, failures: {health['consecutive_failures']})")
+        
+        return adaptive_timeout
 
             # Add recent performance metrics
             recent_metrics = [
