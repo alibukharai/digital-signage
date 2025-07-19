@@ -109,7 +109,8 @@ class EventBus:
                 try:
                     handler(event)
                 except Exception as e:
-                    print(f"Error in event handler: {e}")
+                    import logging
+                logging.getLogger(__name__).error(f"Error in event handler: {e}")
 
     async def publish_async(
         self, event_type: EventType, data: Any, source: str = "unknown"
@@ -131,7 +132,8 @@ class EventBus:
                 try:
                     handler(event)
                 except Exception as e:
-                    print(f"Error in sync event handler: {e}")
+                    import logging
+                    logging.getLogger(__name__).error(f"Error in sync event handler: {e}")
 
         # Notify async subscribers
         if event_type in self._async_subscribers:
@@ -143,7 +145,8 @@ class EventBus:
                     else:
                         handler(event)
                 except Exception as e:
-                    print(f"Error in async event handler: {e}")
+                    import logging
+                    logging.getLogger(__name__).error(f"Error in async event handler: {e}")
 
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)

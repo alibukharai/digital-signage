@@ -55,7 +55,10 @@ class LoggingService(ILogger):
                 file_handler.setFormatter(formatter)
                 logger.addHandler(file_handler)
             except Exception as e:
-                print(f"Warning: Could not setup file logging: {e}")
+                # Use basic logging since file logging failed
+            import logging
+            logging.basicConfig(level=logging.WARNING)
+            logging.warning(f"Could not setup file logging: {e}")
 
         return logger
 

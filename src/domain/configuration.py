@@ -177,7 +177,8 @@ def load_config(config_path: Optional[str] = None) -> ProvisioningConfig:
 
             return ProvisioningConfig.from_dict(clean_data)
         except Exception as e:
-            print(f"Warning: Failed to load config from {config_path}: {e}")
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to load config from {config_path}: {e}")
 
     # Return default configuration
     return ProvisioningConfig()
@@ -193,5 +194,6 @@ def save_config(config: ProvisioningConfig, config_path: str = "config.json") ->
             json.dump(config.to_dict(), f, indent=2)
         return True
     except Exception as e:
-        print(f"Error saving config: {e}")
+                    import logging
+            logging.getLogger(__name__).error(f"Error saving config: {e}")
         return False

@@ -260,9 +260,14 @@ class NetworkService(INetworkService):
 
             return optimizations_applied > 0
 
-        except Exception as e:
+        except (subprocess.CalledProcessError, OSError, IOError, FileNotFoundError) as e:
             if self.logger:
                 self.logger.error(f"OP1 optimization failed: {e}")
+            return False
+        except Exception as e:
+            # Unexpected error - log with more details for debugging
+            if self.logger:
+                self.logger.error(f"Unexpected OP1 optimization error: {type(e).__name__}: {e}")
             return False
 
     async def scan_networks(
