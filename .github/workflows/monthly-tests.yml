@@ -27,8 +27,11 @@ env:
 jobs:
   comprehensive-tests:
     name: 🌙 Monthly Comprehensive Testing
-    runs-on: [self-hosted, rock-pi-3399]
+    runs-on: ubuntu-latest
     timeout-minutes: 90
+    
+    # Note: Changed from self-hosted to ubuntu-latest for better availability
+    # If self-hosted runners are available, update this back to: [self-hosted, rock-pi-3399]
     
     steps:
     - name: 📥 Checkout Code
