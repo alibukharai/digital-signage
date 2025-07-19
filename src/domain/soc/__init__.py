@@ -4,7 +4,8 @@ Refactored for better maintainability and organization
 """
 
 from .base_types import SOCFamily, ArchitectureType, PerformanceProfile, ConnectivityProfile, IOProfile, PowerProfile
-from .specifications import SOCSpecification, RockchipRK3399, RockchipOP1
+# Import from the actual soc_specifications module in the parent directory
+from ..soc_specifications import SOCSpecification
 from .manager import SOCManager
 
 # Create global instance

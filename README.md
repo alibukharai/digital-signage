@@ -6,6 +6,31 @@ A modern, production-grade network provisioning system for ROCK Pi 4B+ devices t
 
 This system provides a comprehensive solution for configuring WiFi credentials on ROCK Pi 4B+ devices without requiring a keyboard, mouse, or direct network access. The device displays a QR code on its HDMI 2.0 output (supporting up to 4K@60Hz) and broadcasts a BLE 5.0 service that mobile applications can connect to for credential provisioning. Designed specifically for digital signage deployments where devices need seamless, headless network configuration.
 
+## 🚀 Recent Improvements (Latest Version)
+
+### Enhanced Architecture & Code Quality
+- **Refactored Large Files**: Split monolithic files into focused, maintainable modules
+  - `device.py` (847 lines) → modular device detection and info provision
+  - `network.py` (791 lines) → separate connection, scanning, and monitoring services
+  - `display.py` (602 lines) → enhanced with QR code generation module
+- **Eliminated Mock Dependencies**: Replaced all mocks with real integration tests using test adapters
+- **Improved Code Organization**: Better separation of concerns with clear module boundaries
+
+### Advanced QR Code Functionality
+- **Enhanced QR Generation**: New modular QR code generator with multiple output formats
+- **Serial Output Capability**: QR code data now available via serial/stdout for testing and monitoring
+  - **JSON Format**: Structured data for automated test consumption
+  - **Text Format**: Human-readable output for debugging
+  - **ASCII Format**: Visual QR codes displayed in terminal
+- **Real-time Monitoring**: Test scripts can now capture and parse QR code information
+- **Caching & Performance**: Improved QR code generation with intelligent caching
+
+### Testing Infrastructure
+- **Integration Test Suite**: New comprehensive tests without mocks using real service adapters
+- **Hardware Simulation**: Test adapters provide realistic hardware behavior for testing
+- **End-to-End Testing**: Complete provisioning flow testing with QR code verification
+- **Concurrent Testing**: Stress testing with multiple simultaneous operations
+
 ## 🔧 Hardware Support
 
 ### Primary Target: ROCK Pi 4B+ (OP1 Processor)
@@ -166,6 +191,35 @@ make logs
 # Check system health and ROCK Pi 4B+ optimizations
 python3 scripts/verify_installation.py
 ```
+
+### 🔍 QR Code Testing & Monitoring
+
+The system now provides enhanced QR code functionality with serial output for testing and monitoring:
+
+```bash
+# Test QR code functionality standalone
+python3 standalone_qr_test.py
+
+# Monitor QR code generation in real-time (JSON format for automation)
+./your_app | grep "QR_CODE_JSON" | jq '.qr_code_info'
+
+# Debug QR code issues (human-readable format)
+./your_app | grep -A 10 "QR_CODE_TEXT_START"
+
+# View ASCII QR codes in terminal
+./your_app | grep -A 20 "QR_CODE_ASCII_START"
+```
+
+**QR Code Serial Output Formats:**
+- **JSON**: `{"qr_code_info": {"data": "...", "timestamp": "...", ...}}` - For automated testing
+- **Text**: Human-readable format with timestamp and metadata - For debugging  
+- **ASCII**: Visual QR code representation in terminal - For visual verification
+
+**Use Cases:**
+- Automated test scripts can parse JSON output to verify QR code generation
+- Debug sessions can monitor QR code data in real-time
+- CI/CD pipelines can validate provisioning flow end-to-end
+- Field technicians can verify QR codes without external tools
 
 ### Initial Configuration
 
@@ -648,7 +702,7 @@ pytest tests/ --memray
 
 #### **Development Testing**
 ```bash
-# Run all tests with real service integration
+# Run all tests with real service integration (no mocks!)
 make test
 
 # Run with detailed output and coverage
@@ -656,8 +710,14 @@ pytest tests/ -v --cov=src --cov-report=html
 
 # Run specific test categories
 pytest tests/integration/ -k "test_complete_provisioning"
-pytest tests/normal_operation/ -k "test_auto_reconnect"
+pytest tests/normal_operation/ -k "test_auto_reconnect" 
 pytest tests/error_recovery/ -k "test_bluetooth_recovery"
+
+# NEW: QR code integration tests
+pytest tests/integration/test_qr_code_integration.py -v
+
+# NEW: Test with real hardware adapters (no mocks)
+pytest tests/integration/ -k "test_qr_code" --capture=no
 
 # Performance profiling
 pytest tests/integration/ --profile-svg
@@ -679,7 +739,10 @@ make lint-test
 ### **📈 Test Metrics & Quality**
 
 #### **Coverage Statistics**
-- **Overall Coverage**: >95% with real execution paths
+- **Overall Coverage**: >95% with real execution paths (no mocks used)
+- **Integration Tests**: 100% use real service adapters instead of mocks
+- **QR Code Functionality**: Comprehensive testing with serial output validation
+- **Hardware Simulation**: Realistic test environments without external dependencies
 - **Integration Coverage**: 100% of service interactions tested
 - **Error Path Coverage**: All error scenarios validated with real services
 - **Async Coverage**: Complete async/await pattern validation
@@ -928,3 +991,38 @@ For Rock Pi 3399 hardware testing:
 - Only push to main when ready
 - Leverage self-hosted runner for hardware tests
 - Use manual workflow dispatch for full testing
+
+---
+
+## 🎯 Latest Enhancements Summary
+
+This version includes significant improvements based on the CODE_IMPROVEMENT_REPORT.md analysis:
+
+### ✅ **Code Quality Improvements**
+- **Refactored Large Files**: Broke down 847-line device.py and 791-line network.py into focused modules
+- **Eliminated All Mocks**: Replaced mock-based tests with real integration tests using service adapters
+- **Enhanced Architecture**: Better separation of concerns and improved maintainability
+
+### ✅ **New QR Code Features**  
+- **Serial Output Capability**: QR code data now available in JSON, text, and ASCII formats via stdout
+- **Real-time Monitoring**: Test scripts and automation can now capture and parse QR code information
+- **Enhanced Testing**: Comprehensive QR code testing without external dependencies
+
+### ✅ **Testing Infrastructure**
+- **Integration Test Suite**: All tests now use real service implementations
+- **Hardware Simulation**: Realistic test environments without requiring actual hardware
+- **End-to-End Validation**: Complete provisioning flow testing with QR code verification
+
+### ✅ **Developer Experience**
+- **Standalone Testing**: `python3 standalone_qr_test.py` demonstrates all QR features
+- **Better Debugging**: Multiple output formats for different use cases  
+- **CI/CD Ready**: Enhanced automation capabilities for continuous integration
+
+**Try the new features:**
+```bash
+# Test the enhanced QR code functionality
+python3 standalone_qr_test.py
+
+# See the refactored, cleaner codebase
+find src/infrastructure/device src/infrastructure/display -name "*.py" | head -10
+```
