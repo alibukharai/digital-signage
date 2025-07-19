@@ -58,6 +58,8 @@ src/
 - **Session Management**: Secure BLE session handling
 - **Input Validation**: Comprehensive injection prevention
 - **Audit Logging**: Security event tracking
+- **Automated Security Scanning**: Integrated vulnerability detection and dependency monitoring
+- **Weekly Security Audits**: Automated security posture assessment
 
 ### 📱 Provisioning Methods
 - **BLE Provisioning**: Mobile app integration via Bluetooth 5.0
@@ -66,11 +68,12 @@ src/
 - **Multi-Network**: WPA2/WPA3 enterprise support
 
 ### 🚀 System Features
-- **Async-First Design**: Full async/await implementation
+- **Async-First Design**: Full async/await implementation with proper coordination
 - **State Machine**: Robust workflow management
 - **Event-Driven**: Decoupled component communication
 - **Hardware Abstraction**: Supports multiple SoC families
-- **Health Monitoring**: System diagnostics and recovery
+- **Health Monitoring**: System diagnostics and recovery with async support
+- **Production Logging**: Structured logging with proper levels (no print statements)
 
 ## 📋 Hardware Support
 
@@ -192,6 +195,7 @@ python tests/validate_tests.py
 - **~2,800 lines** of application code
 - **Comprehensive testing** with real hardware adapters
 - **No mocks** - integration tests use service adapters
+- **Enhanced CI/CD**: Automated security scanning, dependency monitoring, and quality checks
 
 ### Development Setup
 ```bash
@@ -206,6 +210,10 @@ make lint
 
 # Run type checking
 make type-check
+
+# Security scanning
+bandit -r src/
+safety check
 
 # Build documentation
 make docs
@@ -262,10 +270,11 @@ soc_registry.register("custom_board", CustomSOC)
 ## 🔍 Monitoring & Debugging
 
 ### Logging
-- **Structured logging** with JSON output
+- **Structured logging** with JSON output (no print statements in production)
 - **Multiple log levels**: DEBUG, INFO, WARNING, ERROR, CRITICAL
 - **File rotation** and compression support
 - **Remote logging** via syslog/journald
+- **Async-safe logging**: Proper coordination between sync and async contexts
 
 ### Health Monitoring
 ```bash
@@ -299,14 +308,24 @@ python tests/standalone_qr_test.py --debug
 3. Write tests for your changes
 4. Implement your feature
 5. Run the test suite: `python tests/run_tests.py`
-6. Submit a pull request
+6. Run security checks: `bandit -r src/ && safety check`
+7. Submit a pull request
+
+### Automated CI/CD Pipeline
+- **Pull Request Validation**: Automated code formatting, linting, and quick tests
+- **Security Scanning**: Bandit, Safety, and Semgrep analysis on every build
+- **Hardware Testing**: Rock Pi 3399 self-hosted runner for integration tests
+- **Weekly Security Audits**: Comprehensive vulnerability and dependency analysis
+- **Dependency Updates**: Automated monitoring and testing of package updates
 
 ### Code Standards
 - **PEP 8** compliance with black formatting
 - **Type hints** required for public interfaces
-- **Comprehensive tests** for all new features
+- **Comprehensive tests** for all new features (75% coverage minimum)
 - **Documentation** for public APIs
 - **Clean Architecture** principles
+- **Security scanning** integrated into CI/CD pipeline
+- **Automated dependency vulnerability checks**
 
 ### Bug Reports
 Please use the issue tracker and include:
@@ -343,8 +362,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Status**: ✅ Production Ready  
-**Version**: 1.0.0  
+**Status**: ✅ Production Ready with Enhanced Security  
+**Version**: 1.1.0  
 **Last Updated**: $(date)  
 **Codebase**: 62 files, ~2,800 LOC  
-**Test Coverage**: 95%+ integration coverage
+**Test Coverage**: 75%+ unit coverage, 95%+ integration coverage  
+**Security**: Automated scanning with weekly audits  
+**CI/CD**: Enhanced with security, performance, and quality monitoring

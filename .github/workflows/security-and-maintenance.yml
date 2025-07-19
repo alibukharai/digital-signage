@@ -1,0 +1,218 @@
+name: 🔒 Security & Maintenance
+
+on:
+  schedule:
+    # Run weekly on Sundays at 2 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full          # Full security audit
+          - dependencies  # Dependencies only
+          - code         # Code analysis only
+
+env:
+  PYTHON_VERSION: '3.9'
+
+jobs:
+  security-audit:
+    name: 🔒 Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+        # Security scanning tools
+        pip install bandit safety semgrep pip-audit
+
+    - name: 🔍 Code Security Analysis
+      if: contains(github.event.inputs.scan_type, 'code') || github.event.inputs.scan_type == 'full' || github.event_name == 'schedule'
+      run: |
+        echo "🔍 Running code security analysis..."
+        
+        # Bandit - Python security linter
+        echo "📋 Running Bandit analysis..."
+        bandit -r src/ -f json -o bandit-report.json
+        
+        # Semgrep - Static analysis
+        echo "📋 Running Semgrep analysis..."
+        semgrep --config=auto src/ --json --output=semgrep-report.json || true
+        
+        # Display critical findings
+        echo "🚨 Critical Security Findings:"
+        if [ -f bandit-report.json ]; then
+          jq -r '.results[] | select(.issue_severity == "HIGH" or .issue_severity == "MEDIUM") | "⚠️ \(.filename):\(.line_number) - \(.test_name): \(.issue_text)"' bandit-report.json || echo "No critical issues found"
+        fi
+
+    - name: 🔒 Dependency Security Check
+      if: contains(github.event.inputs.scan_type, 'dependencies') || github.event.inputs.scan_type == 'full' || github.event_name == 'schedule'
+      run: |
+        echo "🔒 Checking dependencies for known vulnerabilities..."
+        
+        # Safety - Check for known security vulnerabilities
+        echo "📋 Running Safety check..."
+        safety check --json --output safety-report.json || true
+        
+        # pip-audit - Audit Python packages
+        echo "📋 Running pip-audit..."
+        pip-audit --format=json --output=pip-audit-report.json || true
+        
+        # Display findings
+        echo "🚨 Dependency Vulnerabilities:"
+        if [ -f safety-report.json ]; then
+          jq -r '.vulnerabilities[]? | "⚠️ \(.package_name) v\(.installed_version) - \(.advisory)"' safety-report.json || echo "No vulnerabilities found"
+        fi
+
+    - name: 📊 Generate Security Report
+      if: always()
+      run: |
+        echo "# 🔒 Security Audit Report" > security-report.md
+        echo "" >> security-report.md
+        echo "**Date:** $(date)" >> security-report.md
+        echo "**Commit:** ${{ github.sha }}" >> security-report.md
+        echo "**Scan Type:** ${{ github.event.inputs.scan_type || 'full' }}" >> security-report.md
+        echo "" >> security-report.md
+        
+        echo "## 📋 Summary" >> security-report.md
+        echo "" >> security-report.md
+        
+        # Count findings
+        BANDIT_COUNT=$(jq '.results | length' bandit-report.json 2>/dev/null || echo "0")
+        SAFETY_COUNT=$(jq '.vulnerabilities | length' safety-report.json 2>/dev/null || echo "0")
+        
+        echo "- **Bandit findings:** $BANDIT_COUNT" >> security-report.md
+        echo "- **Safety vulnerabilities:** $SAFETY_COUNT" >> security-report.md
+        echo "" >> security-report.md
+        
+        if [ "$BANDIT_COUNT" -eq 0 ] && [ "$SAFETY_COUNT" -eq 0 ]; then
+          echo "✅ **Status:** No security issues detected" >> security-report.md
+        else
+          echo "⚠️ **Status:** Security issues found - review required" >> security-report.md
+        fi
+
+    - name: 📤 Upload Security Reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          *-report.json
+          security-report.md
+        retention-days: 30
+
+  dependency-update-check:
+    name: 📦 Dependency Updates
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    - name: 📦 Check for Updates
+      run: |
+        echo "📦 Checking for dependency updates..."
+        pip install pip-check-updates
+        
+        # Check for outdated packages
+        echo "📋 Outdated packages:"
+        pip list --outdated --format=json > outdated-packages.json
+        
+        # Display findings
+        if [ -s outdated-packages.json ]; then
+          echo "📦 Found outdated packages:"
+          jq -r '.[] | "📦 \(.name): \(.version) -> \(.latest_version)"' outdated-packages.json
+        else
+          echo "✅ All packages are up to date"
+        fi
+
+    - name: 🧪 Test with Latest Dependencies
+      run: |
+        echo "🧪 Testing with latest compatible versions..."
+        
+        # Create a test environment
+        python -m venv test-env
+        source test-env/bin/activate
+        
+        # Install with latest versions
+        pip install --upgrade pip
+        pip install -e ".[dev]" --upgrade
+        
+        # Run quick tests
+        python -m pytest tests/ -m "not hardware and not integration and not slow" --tb=short -q --maxfail=5 || {
+          echo "⚠️ Tests failed with latest dependencies"
+          echo "Manual review required before updating"
+        }
+
+  maintenance-tasks:
+    name: 🧹 Maintenance Tasks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🧹 Code Quality Maintenance
+      run: |
+        echo "🧹 Running maintenance tasks..."
+        
+        # Check for TODO/FIXME comments
+        echo "📋 Outstanding TODOs and FIXMEs:"
+        grep -r -n "TODO\|FIXME\|XXX\|HACK" src/ tests/ --include="*.py" | head -20 || echo "None found"
+        
+        # Check for large files
+        echo "📋 Large files (>1MB):"
+        find . -type f -size +1M -not -path "./.git/*" -not -path "./venv/*" -not -path "./.pytest_cache/*" || echo "None found"
+        
+        # Check for unused imports (basic check)
+        echo "📋 Checking for potential issues..."
+        python3 -c "
+        import ast
+        import os
+        for root, dirs, files in os.walk('src'):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for file in files:
+                if file.endswith('.py'):
+                    filepath = os.path.join(root, file)
+                    try:
+                        with open(filepath, 'r') as f:
+                            content = f.read()
+                        if len(content.split('\n')) > 500:
+                            print(f'📄 Large file: {filepath} ({len(content.split())} lines)')
+                    except:
+                        pass
+        "
+
+    - name: 📊 Repository Health Check
+      run: |
+        echo "📊 Repository health metrics:"
+        echo "- Total Python files: $(find src/ -name '*.py' | wc -l)"
+        echo "- Total test files: $(find tests/ -name '*.py' | wc -l)"
+        echo "- Lines of code: $(find src/ -name '*.py' -exec wc -l {} + | tail -1 | awk '{print $1}')"
+        echo "- Repository size: $(du -sh . | cut -f1)"
+        
+        # Check for common issues
+        echo "🔍 Common issues check:"
+        echo "- Files with no docstring: $(grep -L '\"\"\"' src/**/*.py | wc -l || echo 0)"
+        echo "- Files with print statements: $(grep -l 'print(' src/**/*.py | wc -l || echo 0)"

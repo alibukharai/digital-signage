@@ -119,9 +119,10 @@ jobs:
           --cov=src \
           --cov-report=xml \
           --cov-report=term-missing \
-          --cov-fail-under=70 \
+          --cov-fail-under=75 \
           -x \
-          --tb=short
+          --tb=short \
+          --durations=10
 
     - name: 📊 Upload Coverage
       uses: codecov/codecov-action@v3
@@ -130,6 +131,25 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         file: ./coverage.xml
         fail_ci_if_error: false
+
+    - name: 🔒 Security Scan
+      run: |
+        echo "🔒 Running security scans..."
+        # Install security tools
+        pip install bandit safety
+        
+        # Run bandit for common security issues
+        bandit -r src/ -f json -o bandit-report.json || true
+        
+        # Check for known vulnerabilities in dependencies
+        safety check --json --output safety-report.json || true
+        
+        # Display results
+        echo "🔍 Security scan completed"
+        if [ -f bandit-report.json ]; then
+          echo "📋 Bandit findings:"
+          cat bandit-report.json | jq -r '.results[] | "⚠️ \(.filename):\(.line_number) - \(.test_name)"' || echo "No issues found"
+        fi
 
   # Hardware tests (only on main branch or manual trigger - uses self-hosted runner)
   hardware-tests:

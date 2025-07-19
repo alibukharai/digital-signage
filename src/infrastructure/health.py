@@ -48,6 +48,64 @@ class HealthMonitorService(IHealthMonitor):
                 "Health monitor service initialized with enhanced coordination"
             )
 
+    async def start_monitoring_async(self) -> Result[None, Exception]:
+        """Start async monitoring (for use in async contexts)"""
+        try:
+            with self._state_lock:
+                if self.is_monitoring:
+                    return Result.success(None)
+
+                # Clear shutdown event
+                self._shutdown_event.clear()
+
+                # Initialize baseline metrics
+                self._establish_baseline_metrics()
+
+                self.is_monitoring = True
+
+                # Start async monitoring task instead of thread
+                self._monitor_task = asyncio.create_task(self._monitor_loop_async())
+
+                if self.logger:
+                    self.logger.info("Async health monitoring started")
+
+                return Result.success(None)
+
+        except Exception as e:
+            error_msg = f"Failed to start async health monitoring: {e}"
+            if self.logger:
+                self.logger.error(error_msg)
+            return Result.failure(Exception(error_msg))
+
+    async def stop_monitoring_async(self) -> Result[None, Exception]:
+        """Stop async monitoring"""
+        try:
+            with self._state_lock:
+                if not self.is_monitoring:
+                    return Result.success(None)
+
+                self.is_monitoring = False
+                self._shutdown_event.set()
+
+                # Cancel async task if it exists
+                if hasattr(self, '_monitor_task') and self._monitor_task:
+                    self._monitor_task.cancel()
+                    try:
+                        await self._monitor_task
+                    except asyncio.CancelledError:
+                        pass
+
+                if self.logger:
+                    self.logger.info("Async health monitoring stopped")
+
+                return Result.success(None)
+
+        except Exception as e:
+            error_msg = f"Failed to stop async health monitoring: {e}"
+            if self.logger:
+                self.logger.error(error_msg)
+            return Result.failure(Exception(error_msg))
+
     def check_system_health(self) -> Result[Dict[str, Any], Exception]:
         """Perform system health check with enhanced accuracy and coordination"""
         with self._operation_context("system_health_check"):
@@ -252,15 +310,35 @@ class HealthMonitorService(IHealthMonitor):
             return Result.failure(Exception(error_msg))
 
     def _monitor_loop(self):
-        """Main monitoring loop"""
+        """Main monitoring loop - DEPRECATED: Use async version instead"""
+        if self.logger:
+            self.logger.warning("Using deprecated synchronous monitor loop. Consider using async version.")
+        
         while self.is_monitoring:
             try:
                 self.check_system_health()
-                time.sleep(self.check_interval)
+                # Use threading event instead of blocking sleep
+                if self._shutdown_event.wait(self.check_interval):
+                    break
             except Exception as e:
                 if self.logger:
                     self.logger.error(f"Error in health monitor loop: {e}")
-                time.sleep(self.check_interval)
+                if self._shutdown_event.wait(self.check_interval):
+                    break
+
+    async def _monitor_loop_async(self):
+        """Async monitoring loop for use in async contexts"""
+        if self.logger:
+            self.logger.info("Starting async health monitoring loop")
+        
+        while self.is_monitoring and not self._shutdown_event.is_set():
+            try:
+                self.check_system_health()
+                await asyncio.sleep(self.check_interval)
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Error in async health monitor loop: {e}")
+                await asyncio.sleep(self.check_interval)
 
     def _monitor_loop_enhanced(self):
         """Enhanced monitoring loop with proper coordination and error handling"""

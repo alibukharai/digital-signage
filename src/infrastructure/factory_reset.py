@@ -33,6 +33,9 @@ class FactoryResetService(IFactoryResetService):
         self.recovery_mode = False
         self.recovery_start_time: Optional[float] = None
 
+        # Threading coordination
+        self._shutdown_event = threading.Event()
+
         # Recovery data file
         self.recovery_file = Path("/tmp/rockpi_recovery.json")
 
@@ -257,12 +260,15 @@ class FactoryResetService(IFactoryResetService):
                             )
                         button_pressed_time = None
 
-                time.sleep(0.1)  # Check every 100ms
+                # Use threading event instead of blocking sleep
+                if self._shutdown_event.wait(0.1):  # Check every 100ms
+                    break
 
             except Exception as e:
                 if self.logger:
                     self.logger.error(f"Error monitoring reset pin: {e}")
-                time.sleep(1)
+                if self._shutdown_event.wait(1):
+                    break
 
     def _trigger_recovery_mode(self):
         """Trigger recovery mode"""
