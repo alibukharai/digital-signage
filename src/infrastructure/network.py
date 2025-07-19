@@ -224,10 +224,16 @@ class NetworkService(INetworkService):
                             # Some optimizations may not be supported, continue
                             pass
 
-                except Exception as e:
+                except (subprocess.CalledProcessError, OSError, IOError) as e:
                     if self.logger:
                         self.logger.warning(
                             f"Ethernet optimization failed for {interface}: {e}"
+                        )
+                except Exception as e:
+                    # Catch-all for unexpected errors, but log them as errors
+                    if self.logger:
+                        self.logger.error(
+                            f"Unexpected error during ethernet optimization for {interface}: {e}"
                         )
 
             # Optimize WiFi power management for BT 5.0 coexistence

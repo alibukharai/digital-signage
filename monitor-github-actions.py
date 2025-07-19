@@ -7,17 +7,25 @@ Run this script to get insights into your workflow efficiency.
 """
 
 import json
+import logging
 import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def get_workflow_files():
     """Get all workflow files in the repository."""
     workflow_dir = Path(".github/workflows")
     if not workflow_dir.exists():
-        print("❌ No .github/workflows directory found")
+        logger.error("❌ No .github/workflows directory found")
         return []
     
     return list(workflow_dir.glob("*.yml")) + list(workflow_dir.glob("*.yaml"))
@@ -43,48 +51,31 @@ def analyze_workflow_triggers(workflow_file):
             
         return triggers
     except Exception as e:
-        print(f"⚠️ Error analyzing {workflow_file}: {e}")
+        logger.warning(f"⚠️ Error analyzing {workflow_file}: {e}")
         return []
 
 
 def estimate_monthly_usage():
     """Estimate monthly GitHub Actions usage."""
     
+    # Rough estimates based on workflow complexity
     estimates = {
-        'pr-validation.yml': {
-            'duration_minutes': 5,
-            'frequency_per_month': 20,  # 20 PRs per month
-            'description': 'PR validation (fast checks)'
-        },
-        'optimized-ci.yml': {
-            'duration_minutes': 12,
-            'frequency_per_month': 25,  # 25 pushes to main/develop
-            'description': 'Main CI/CD (standard tests)'
-        },
-        'ci-cd.yml': {
-            'duration_minutes': 45,
-            'frequency_per_month': 5,   # If still using the original
-            'description': 'Full CI/CD (comprehensive)'
-        },
-        'monthly-tests.yml': {
-            'duration_minutes': 90,
-            'frequency_per_month': 1,   # Once per month
-            'description': 'Monthly comprehensive tests'
-        },
-        'nightly-tests.yml': {
-            'duration_minutes': 60,
-            'frequency_per_month': 30,  # If still using nightly
-            'description': 'Nightly tests (if enabled)'
-        }
+        'ci-cd.yml': {'duration_minutes': 25, 'frequency_per_month': 60},
+        'optimized-ci.yml': {'duration_minutes': 12, 'frequency_per_month': 60},
+        'pr-validation.yml': {'duration_minutes': 8, 'frequency_per_month': 40},
+        'nightly-tests.yml': {'duration_minutes': 45, 'frequency_per_month': 30},
+        'monthly-tests.yml': {'duration_minutes': 45, 'frequency_per_month': 1},
+        'deploy.yml': {'duration_minutes': 15, 'frequency_per_month': 20},
+        'release.yml': {'duration_minutes': 20, 'frequency_per_month': 4},
     }
     
     workflows = get_workflow_files()
     total_minutes = 0
     
-    print("📊 GitHub Actions Usage Estimation")
-    print("=" * 50)
-    print(f"{'Workflow':<25} {'Duration':<10} {'Freq/Month':<12} {'Total':<10}")
-    print("-" * 50)
+    logger.info("📊 GitHub Actions Usage Estimation")
+    logger.info("=" * 50)
+    logger.info(f"{'Workflow':<25} {'Duration':<10} {'Freq/Month':<12} {'Total':<10}")
+    logger.info("-" * 50)
     
     for workflow in workflows:
         filename = workflow.name
@@ -93,127 +84,119 @@ def estimate_monthly_usage():
             monthly_minutes = est['duration_minutes'] * est['frequency_per_month']
             total_minutes += monthly_minutes
             
-            print(f"{filename:<25} {est['duration_minutes']:>5} min {est['frequency_per_month']:>8}/month {monthly_minutes:>7} min")
-    
-    print("-" * 50)
-    print(f"{'TOTAL ESTIMATED':<25} {'':<10} {'':<12} {total_minutes:>7} min")
-    print()
+            logger.info(f"{filename:<25} {est['duration_minutes']:>5} min {est['frequency_per_month']:>8}/month {monthly_minutes:>7} min")
+
+    logger.info("-" * 50)
+    logger.info(f"{'TOTAL ESTIMATED':<25} {'':<10} {'':<12} {total_minutes:>7} min")
+    logger.info("")
     
     # Free tier limits
     FREE_TIER_LIMIT = 2000  # minutes per month
     usage_percentage = (total_minutes / FREE_TIER_LIMIT) * 100
     
-    print("🎯 Free Tier Analysis:")
-    print(f"  • Estimated usage: {total_minutes} minutes/month")
-    print(f"  • Free tier limit: {FREE_TIER_LIMIT} minutes/month")
-    print(f"  • Usage percentage: {usage_percentage:.1f}%")
+    logger.info("🎯 Free Tier Analysis:")
+    logger.info(f"  • Estimated usage: {total_minutes} minutes/month")
+    logger.info(f"  • Free tier limit: {FREE_TIER_LIMIT} minutes/month")
+    logger.info(f"  • Usage percentage: {usage_percentage:.1f}%")
     
-    if usage_percentage < 50:
-        print("  • Status: ✅ Excellent - Well within free limits")
-    elif usage_percentage < 75:
-        print("  • Status: ✅ Good - Comfortable usage")
-    elif usage_percentage < 90:
-        print("  • Status: ⚠️ Caution - Monitor usage closely")
+    if usage_percentage < 25:
+        logger.info("  • Status: ✅ Excellent - Well within free limits")
+    elif usage_percentage < 50:
+        logger.info("  • Status: ✅ Good - Comfortable usage")
+    elif usage_percentage < 80:
+        logger.warning("  • Status: ⚠️ Caution - Monitor usage closely")
     else:
-        print("  • Status: ❌ Warning - May exceed free limits")
+        logger.error("  • Status: ❌ Warning - May exceed free limits")
     
-    return total_minutes
+    return total_minutes, usage_percentage
 
 
 def suggest_optimizations():
-    """Suggest optimizations for GitHub Actions usage."""
-    
-    print("\n💡 Optimization Suggestions:")
-    print("-" * 30)
-    
+    """Suggest workflow optimizations."""
     workflows = get_workflow_files()
+    heavy_workflows = [w for w in workflows if 'nightly' in w.name.lower() or 'full' in w.name.lower()]
     
-    # Check if original heavy workflows exist
-    heavy_workflows = ['ci-cd.yml', 'nightly-tests.yml']
-    found_heavy = [w for w in workflows if w.name in heavy_workflows]
+    logger.info("\n💡 Optimization Suggestions:")
+    logger.info("-" * 30)
     
-    if found_heavy:
-        print("🚨 Heavy workflows detected:")
-        for workflow in found_heavy:
-            print(f"  • {workflow.name} - Consider using optimized alternatives")
-        print()
+    # Check for heavy workflows
+    if heavy_workflows:
+        logger.warning("🚨 Heavy workflows detected:")
+        for workflow in heavy_workflows:
+            logger.warning(f"  • {workflow.name} - Consider using optimized alternatives")
+        logger.info("")
     
-    print("✅ Recommended optimizations:")
-    print("  1. Use 'optimized-ci.yml' instead of 'ci-cd.yml'")
-    print("  2. Replace 'nightly-tests.yml' with 'monthly-tests.yml'") 
-    print("  3. Set up Rock Pi 3399 as self-hosted runner")
-    print("  4. Use draft PRs while developing")
-    print("  5. Enable path-based workflow filtering")
-    print("  6. Use workflow concurrency controls")
-    print()
+    logger.info("✅ Recommended optimizations:")
+    logger.info("  1. Use 'optimized-ci.yml' instead of 'ci-cd.yml'")
+    logger.info("  2. Replace 'nightly-tests.yml' with 'monthly-tests.yml'")
+    logger.info("  3. Set up Rock Pi 3399 as self-hosted runner")
+    logger.info("  4. Use draft PRs while developing")
+    logger.info("  5. Enable path-based workflow filtering")
+    logger.info("  6. Use workflow concurrency controls")
+    logger.info("")
     
-    print("🎯 Advanced optimizations:")
-    print("  • Cache dependencies aggressively")
-    print("  • Use matrix builds sparingly")
-    print("  • Implement smart change detection")
-    print("  • Prefer self-hosted for hardware tests")
+    logger.info("🎯 Advanced optimizations:")
+    logger.info("  • Cache dependencies aggressively")
+    logger.info("  • Use matrix builds sparingly")
+    logger.info("  • Implement smart change detection")
+    logger.info("  • Prefer self-hosted for hardware tests")
 
 
 def check_repository_type():
-    """Check if repository is public or private."""
+    """Check if repository is public/private and on GitHub."""
     try:
-        # Try to get repository info using git remote
-        result = subprocess.run(
-            ['git', 'remote', 'get-url', 'origin'],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        
+        # Get remote URL
+        result = subprocess.run(['git', 'remote', 'get-url', 'origin'], 
+                               capture_output=True, text=True, check=True)
         remote_url = result.stdout.strip()
         
         if 'github.com' in remote_url:
-            print("📦 Repository detected on GitHub")
-            print("💡 Note: Public repositories have unlimited GitHub Actions minutes")
-            print("         Private repositories have 2,000 minutes/month on free tier")
+            logger.info("📦 Repository detected on GitHub")
+            logger.info("💡 Note: Public repositories have unlimited GitHub Actions minutes")
+            logger.info("         Private repositories have 2,000 minutes/month on free tier")
             return True
         else:
-            print("📦 Repository not on GitHub or different remote")
+            logger.info("📦 Repository not on GitHub or different remote")
             return False
             
     except subprocess.CalledProcessError:
-        print("⚠️ Could not determine repository information")
+        logger.warning("⚠️ Could not determine repository information")
         return False
 
 
 def main():
-    """Main function."""
-    print("🚀 GitHub Actions Usage Monitor")
-    print("=" * 40)
-    print()
+    """Main function to run the GitHub Actions monitor."""
+    logger.info("🚀 GitHub Actions Usage Monitor")
+    logger.info("=" * 40)
+    logger.info("")
     
-    # Check repository type
     check_repository_type()
-    print()
     
-    # Analyze workflows
+    logger.info("")
+    
     workflows = get_workflow_files()
     
     if not workflows:
-        print("❌ No workflow files found")
-        sys.exit(1)
+        logger.error("❌ No workflow files found")
+        return
     
-    print(f"📁 Found {len(workflows)} workflow files:")
+    logger.info(f"📁 Found {len(workflows)} workflow files:")
+    
     for workflow in workflows:
         triggers = analyze_workflow_triggers(workflow)
-        print(f"  • {workflow.name:<25} Triggers: {', '.join(triggers)}")
-    print()
+        logger.info(f"  • {workflow.name:<25} Triggers: {', '.join(triggers)}")
+    logger.info("")
     
     # Estimate usage
-    estimate_monthly_usage()
+    total_minutes, usage_percentage = estimate_monthly_usage()
     
     # Suggest optimizations
     suggest_optimizations()
     
-    print("\n📖 For more information:")
-    print("  • Setup guide: .github/SETUP_CI_CD.md")
-    print("  • Quick reference: .github/CI_CD_REFERENCE.md")
-    print("  • GitHub Actions pricing: https://github.com/pricing")
+    logger.info("\n📖 For more information:")
+    logger.info("  • Setup guide: .github/SETUP_CI_CD.md")
+    logger.info("  • Quick reference: .github/CI_CD_REFERENCE.md")
+    logger.info("  • GitHub Actions pricing: https://github.com/pricing")
 
 
 if __name__ == "__main__":
