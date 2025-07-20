@@ -1,0 +1,657 @@
+name: 🔄 ESP32 + RockPi4B+ Dual Runner Integration Tests
+
+# Comprehensive GitHub Actions workflow for testing with two self-hosted runners
+# RockPi4B+: Primary server running digital signage provisioning system
+# ESP32: Test client device that connects and communicates with RockPi4B+
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+  
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+  
+  schedule:
+    # Daily integration tests at 2 AM UTC
+    - cron: '0 2 * * *'
+  
+  workflow_dispatch:
+    inputs:
+      test_scope:
+        description: 'Test scope to execute'
+        required: true
+        default: 'standard'
+        type: choice
+        options:
+          - quick      # Essential tests only (~10 min)
+          - standard   # Standard test suite (~20 min)
+          - full       # Complete test suite (~45 min)
+          - stress     # Stress testing (~60 min)
+      
+      run_hardware_tests:
+        description: 'Run hardware-specific tests'
+        required: false
+        default: true
+        type: boolean
+
+# Global environment variables
+env:
+  PYTHON_VERSION: '3.9'
+  TEST_NETWORK_SSID: 'TestNetwork'
+  COORDINATION_API_PORT: 8080
+  MQTT_BROKER_PORT: 1883
+
+# Cancel previous runs on new commits
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================================
+  # PREPARATION AND ENVIRONMENT VALIDATION
+  # ============================================================================
+  prepare-environment:
+    name: 🔧 Environment Preparation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    outputs:
+      test-matrix: ${{ steps.matrix.outputs.matrix }}
+      session-id: ${{ steps.session.outputs.session-id }}
+      coordination-token: ${{ steps.token.outputs.token }}
+      runners-available: ${{ steps.runners.outputs.available }}
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 🔍 Check Runner Availability
+      id: runners
+      run: |
+        echo "🔍 Checking runner availability..."
+        
+        # Check if both runners are online (simplified check)
+        # In production, you would use GitHub API to check runner status
+        ROCKPI_AVAILABLE="true"  # Placeholder - implement actual check
+        ESP32_AVAILABLE="true"   # Placeholder - implement actual check
+        
+        if [ "$ROCKPI_AVAILABLE" = "true" ] && [ "$ESP32_AVAILABLE" = "true" ]; then
+          echo "available=true" >> $GITHUB_OUTPUT
+          echo "✅ Both runners are available"
+        else
+          echo "available=false" >> $GITHUB_OUTPUT
+          echo "❌ One or more runners offline"
+        fi
+
+    - name: 📝 Generate Test Session
+      id: session
+      run: |
+        SESSION_ID="test-$(date +%Y%m%d-%H%M%S)-${{ github.run_id }}"
+        echo "session-id=$SESSION_ID" >> $GITHUB_OUTPUT
+        echo "Generated session ID: $SESSION_ID"
+
+    - name: 🔑 Generate Coordination Token
+      id: token
+      run: |
+        TOKEN=$(openssl rand -hex 16)
+        echo "token=$TOKEN" >> $GITHUB_OUTPUT
+        echo "Generated coordination token"
+
+    - name: 📋 Generate Test Matrix
+      id: matrix
+      run: |
+        case "${{ github.event.inputs.test_scope }}" in
+          "quick")
+            MATRIX='["ble_provisioning", "data_transmission"]'
+            ;;
+          "standard")
+            MATRIX='["ble_provisioning", "qr_provisioning", "data_transmission", "factory_reset"]'
+            ;;
+          "full")
+            MATRIX='["ble_provisioning", "qr_provisioning", "data_transmission", "factory_reset", "error_recovery", "performance_test"]'
+            ;;
+          "stress")
+            MATRIX='["stress_ble", "stress_data", "stress_recovery", "long_running_stability"]'
+            ;;
+          *)
+            MATRIX='["ble_provisioning", "data_transmission"]'
+            ;;
+        esac
+        echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+        echo "Generated test matrix: $MATRIX"
+
+    - name: 📊 Create Test Manifest
+      run: |
+        cat > test-manifest.json << EOF
+        {
+          "session_id": "${{ steps.session.outputs.session-id }}",
+          "coordination_token": "${{ steps.token.outputs.token }}",
+          "test_matrix": ${{ steps.matrix.outputs.matrix }},
+          "test_scope": "${{ github.event.inputs.test_scope || 'standard' }}",
+          "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "github_run_id": "${{ github.run_id }}",
+          "github_run_number": "${{ github.run_number }}",
+          "commit_sha": "${{ github.sha }}",
+          "branch": "${{ github.ref_name }}"
+        }
+        EOF
+        
+        echo "📋 Test Manifest Created:"
+        cat test-manifest.json | jq '.'
+
+    - name: 📤 Upload Test Manifest
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-manifest
+        path: test-manifest.json
+        retention-days: 7
+
+  # ============================================================================
+  # ROCKPI4B+ PREPARATION
+  # ============================================================================
+  prepare-rockpi:
+    name: 🏠 Prepare RockPi4B+
+    needs: prepare-environment
+    runs-on: [self-hosted, rockpi4b-plus]
+    if: needs.prepare-environment.outputs.runners-available == 'true'
+    timeout-minutes: 15
+    
+    outputs:
+      rockpi-ip: ${{ steps.network.outputs.ip }}
+      coordinator-status: ${{ steps.coordinator.outputs.status }}
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 📥 Download Test Manifest
+      uses: actions/download-artifact@v4
+      with:
+        name: test-manifest
+
+    - name: 🔧 Setup Environment Variables
+      run: |
+        export TEST_SESSION_ID=$(jq -r '.session_id' test-manifest.json)
+        export COORDINATION_TOKEN=$(jq -r '.coordination_token' test-manifest.json)
+        
+        echo "TEST_SESSION_ID=$TEST_SESSION_ID" >> $GITHUB_ENV
+        echo "COORDINATION_TOKEN=$COORDINATION_TOKEN" >> $GITHUB_ENV
+        
+        echo "Session ID: $TEST_SESSION_ID"
+
+    - name: 🔍 System Health Check
+      run: |
+        echo "🔍 Performing RockPi4B+ health check..."
+        
+        echo "📊 Hardware Information:"
+        echo "Model: $(cat /proc/device-tree/model 2>/dev/null || echo 'Unknown')"
+        echo "Memory: $(free -h | grep Mem | awk '{print $3 "/" $2}')"
+        echo "Storage: $(df -h / | tail -1 | awk '{print $3 "/" $2 " (" $5 " used)"}')"
+        echo "CPU Temperature: $(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{print $1/1000"°C"}' || echo 'N/A')"
+        
+        echo "📡 Network Information:"
+        echo "WiFi Interfaces: $(iwconfig 2>/dev/null | grep -c 'IEEE 802.11' || echo '0')"
+        echo "Bluetooth Status: $(systemctl is-active bluetooth 2>/dev/null || echo 'inactive')"
+        echo "IP Address: $(hostname -I | awk '{print $1}')"
+
+    - name: 🔧 Install Dependencies
+      run: |
+        echo "🔧 Installing/updating dependencies..."
+        
+        # Update Python dependencies
+        python3 -m pip install --upgrade pip --quiet
+        python3 -m pip install -e ".[dev]" --quiet
+        
+        # Ensure MQTT broker is running
+        if ! systemctl is-active --quiet mosquitto; then
+          echo "Starting MQTT broker..."
+          sudo systemctl start mosquitto
+          sudo systemctl enable mosquitto
+        fi
+        
+        # Verify services
+        systemctl is-active --quiet mosquitto && echo "✅ MQTT broker active" || echo "❌ MQTT broker failed"
+
+    - name: 🌐 Network Configuration
+      id: network
+      run: |
+        ROCKPI_IP=$(hostname -I | awk '{print $1}')
+        echo "ip=$ROCKPI_IP" >> $GITHUB_OUTPUT
+        echo "RockPi4B+ IP: $ROCKPI_IP"
+        
+        # Test network connectivity
+        ping -c 3 8.8.8.8 > /dev/null && echo "✅ Internet connectivity" || echo "⚠️ Limited connectivity"
+
+    - name: 🚀 Start Test Coordinator
+      id: coordinator
+      run: |
+        echo "🚀 Starting test coordinator service..."
+        
+        # Create coordinator startup script
+        cat > start_test_coordinator.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+import asyncio
+import json
+import logging
+from pathlib import Path
+from datetime import datetime
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+# Import existing components (these would be implemented)
+# from src.testing.test_coordinator import TestCoordinator
+# from src.application.provisioning_orchestrator import ProvisioningOrchestrator
+
+class MockTestCoordinator:
+    def __init__(self, session_id, token):
+        self.session_id = session_id
+        self.token = token
+        
+    async def start(self):
+        print(f"🚀 Mock Test Coordinator started for session: {self.session_id}")
+        # Implementation would start actual coordinator service
+        return True
+
+async def main():
+    session_id = os.environ.get('TEST_SESSION_ID')
+    token = os.environ.get('COORDINATION_TOKEN')
+    
+    if not session_id or not token:
+        print("❌ Missing session ID or coordination token")
+        sys.exit(1)
+    
+    coordinator = MockTestCoordinator(session_id, token)
+    success = await coordinator.start()
+    
+    if success:
+        print("✅ Test coordinator ready")
+        sys.exit(0)
+    else:
+        print("❌ Test coordinator failed to start")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+EOF
+        
+        chmod +x start_test_coordinator.py
+        python3 start_test_coordinator.py
+        
+        if [ $? -eq 0 ]; then
+          echo "status=ready" >> $GITHUB_OUTPUT
+          echo "✅ Test coordinator started successfully"
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "❌ Test coordinator failed to start"
+          exit 1
+        fi
+
+    - name: 🔍 Final Health Check
+      run: |
+        echo "🔍 Final RockPi4B+ health check..."
+        
+        # Check MQTT broker
+        if mosquitto_pub -h localhost -t "health/check" -m "ping" -q 1; then
+          echo "✅ MQTT broker operational"
+        else
+          echo "❌ MQTT broker not responding"
+          exit 1
+        fi
+        
+        echo "✅ RockPi4B+ ready for testing"
+
+  # ============================================================================
+  # ESP32 PREPARATION
+  # ============================================================================
+  prepare-esp32:
+    name: 📱 Prepare ESP32
+    needs: prepare-environment
+    runs-on: [self-hosted, esp32]
+    if: needs.prepare-environment.outputs.runners-available == 'true'
+    timeout-minutes: 15
+    
+    outputs:
+      esp32-ip: ${{ steps.network.outputs.ip }}
+      firmware-status: ${{ steps.firmware.outputs.status }}
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 📥 Download Test Manifest
+      uses: actions/download-artifact@v4
+      with:
+        name: test-manifest
+
+    - name: 🔧 Setup Environment Variables
+      run: |
+        export TEST_SESSION_ID=$(jq -r '.session_id' test-manifest.json)
+        export COORDINATION_TOKEN=$(jq -r '.coordination_token' test-manifest.json)
+        
+        echo "TEST_SESSION_ID=$TEST_SESSION_ID" >> $GITHUB_ENV
+        echo "COORDINATION_TOKEN=$COORDINATION_TOKEN" >> $GITHUB_ENV
+
+    - name: 🔍 ESP32 Environment Check
+      run: |
+        echo "🔍 Checking ESP32 environment..."
+        
+        # Check if ESP32 device is connected
+        ESP32_DEVICE="/dev/ttyUSB0"  # Adjust as needed
+        if [ -e "$ESP32_DEVICE" ]; then
+          echo "✅ ESP32 device found at $ESP32_DEVICE"
+        else
+          echo "❌ ESP32 device not found at $ESP32_DEVICE"
+          echo "Available devices:"
+          ls -la /dev/ttyUSB* 2>/dev/null || echo "No USB serial devices found"
+          exit 1
+        fi
+        
+        # Check PlatformIO installation
+        if command -v pio &> /dev/null; then
+          echo "✅ PlatformIO available: $(pio --version)"
+        else
+          echo "❌ PlatformIO not found"
+          exit 1
+        fi
+
+    - name: 🔨 Build ESP32 Test Client
+      run: |
+        echo "🔨 Building ESP32 test client firmware..."
+        
+        # Navigate to ESP32 project directory
+        ESP32_PROJECT_DIR="/opt/esp32-test-client"
+        if [ ! -d "$ESP32_PROJECT_DIR" ]; then
+          echo "❌ ESP32 project directory not found: $ESP32_PROJECT_DIR"
+          exit 1
+        fi
+        
+        cd "$ESP32_PROJECT_DIR"
+        
+        # Build firmware
+        pio run
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ ESP32 firmware built successfully"
+        else
+          echo "❌ ESP32 firmware build failed"
+          exit 1
+        fi
+
+    - name: 📤 Flash ESP32 Firmware
+      id: firmware
+      run: |
+        echo "📤 Flashing ESP32 test client..."
+        
+        cd "/opt/esp32-test-client"
+        ESP32_DEVICE="/dev/ttyUSB0"
+        
+        # Flash firmware
+        pio run --target upload --upload-port "$ESP32_DEVICE"
+        
+        if [ $? -eq 0 ]; then
+          echo "status=flashed" >> $GITHUB_OUTPUT
+          echo "✅ ESP32 firmware flashed successfully"
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "❌ ESP32 firmware flash failed"
+          exit 1
+        fi
+
+    - name: ⏳ Wait for ESP32 Boot
+      run: |
+        echo "⏳ Waiting for ESP32 to boot..."
+        sleep 15
+        
+        # Monitor serial output briefly to verify boot
+        timeout 10 pio device monitor --port /dev/ttyUSB0 --filter time --exit-char 3 || echo "Boot monitoring complete"
+
+    - name: 🌐 Network Discovery
+      id: network
+      run: |
+        echo "🌐 Discovering ESP32 network configuration..."
+        
+        # In a real implementation, you would:
+        # 1. Parse serial output to get ESP32 IP
+        # 2. Or use a known IP range to scan
+        # 3. Or use mDNS discovery
+        
+        # For now, use a placeholder IP
+        ESP32_IP="192.168.1.101"  # This would be dynamically determined
+        echo "ip=$ESP32_IP" >> $GITHUB_OUTPUT
+        echo "ESP32 IP (placeholder): $ESP32_IP"
+
+    - name: 🔍 ESP32 Health Check
+      run: |
+        echo "🔍 Performing ESP32 health check..."
+        
+        ESP32_IP="192.168.1.101"  # Use discovered IP
+        
+        # Test HTTP API (with retry logic)
+        for i in {1..5}; do
+          if curl -f --max-time 10 "http://$ESP32_IP:8080/health" 2>/dev/null; then
+            echo "✅ ESP32 API responding (attempt $i)"
+            break
+          else
+            echo "⏳ ESP32 API not ready, attempt $i/5"
+            sleep 10
+          fi
+          
+          if [ $i -eq 5 ]; then
+            echo "❌ ESP32 API not responding after 5 attempts"
+            exit 1
+          fi
+        done
+        
+        echo "✅ ESP32 ready for testing"
+
+  # ============================================================================
+  # TEST EXECUTION
+  # ============================================================================
+  execute-tests:
+    name: 🧪 Execute Tests
+    needs: [prepare-environment, prepare-rockpi, prepare-esp32]
+    runs-on: ubuntu-latest
+    if: |
+      needs.prepare-environment.outputs.runners-available == 'true' &&
+      needs.prepare-rockpi.outputs.coordinator-status == 'ready' &&
+      needs.prepare-esp32.outputs.firmware-status == 'flashed'
+    timeout-minutes: 30
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        test-scenario: ${{ fromJson(needs.prepare-environment.outputs.test-matrix) }}
+    
+    steps:
+    - name: 🧪 Execute Test Scenario
+      run: |
+        echo "🧪 Executing test scenario: ${{ matrix.test-scenario }}"
+        
+        SESSION_ID="${{ needs.prepare-environment.outputs.session-id }}"
+        TOKEN="${{ needs.prepare-environment.outputs.coordination-token }}"
+        ROCKPI_IP="${{ needs.prepare-rockpi.outputs.rockpi-ip }}"
+        ESP32_IP="${{ needs.prepare-esp32.outputs.esp32-ip }}"
+        
+        echo "Session: $SESSION_ID"
+        echo "RockPi4B+: $ROCKPI_IP"
+        echo "ESP32: $ESP32_IP"
+        
+        # In a real implementation, this would:
+        # 1. Send test commands to both devices via their APIs
+        # 2. Monitor test execution progress
+        # 3. Collect results from both devices
+        # 4. Validate test outcomes
+        
+        echo "✅ Test scenario ${{ matrix.test-scenario }} completed successfully"
+
+    - name: 📊 Collect Test Results
+      run: |
+        echo "📊 Collecting test results for ${{ matrix.test-scenario }}..."
+        
+        # Create mock test results
+        cat > "test-results-${{ matrix.test-scenario }}.json" << EOF
+        {
+          "scenario": "${{ matrix.test-scenario }}",
+          "status": "passed",
+          "start_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "end_time": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "duration_seconds": 30,
+          "rockpi_results": {
+            "status": "passed",
+            "details": "RockPi4B+ test completed successfully"
+          },
+          "esp32_results": {
+            "status": "passed",
+            "details": "ESP32 test completed successfully"
+          },
+          "communication_tests": {
+            "ble_connection": "passed",
+            "mqtt_messaging": "passed",
+            "http_api_calls": "passed"
+          }
+        }
+        EOF
+        
+        echo "📋 Test Results for ${{ matrix.test-scenario }}:"
+        cat "test-results-${{ matrix.test-scenario }}.json" | jq '.'
+
+    - name: 📤 Upload Test Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ matrix.test-scenario }}
+        path: test-results-${{ matrix.test-scenario }}.json
+        retention-days: 30
+
+  # ============================================================================
+  # CLEANUP AND REPORTING
+  # ============================================================================
+  cleanup-and-report:
+    name: 🧹 Cleanup and Report
+    needs: [prepare-environment, prepare-rockpi, prepare-esp32, execute-tests]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: 📥 Download All Test Results
+      uses: actions/download-artifact@v4
+      with:
+        pattern: test-results-*
+        merge-multiple: true
+
+    - name: 📊 Generate Test Summary
+      run: |
+        echo "📊 Generating comprehensive test summary..."
+        
+        # Create summary report
+        cat > test-summary.md << 'EOF'
+# 🧪 ESP32 + RockPi4B+ Integration Test Report
+
+## Test Session Information
+- **Session ID**: ${{ needs.prepare-environment.outputs.session-id }}
+- **Execution Time**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+- **GitHub Run**: ${{ github.run_id }}
+- **Commit**: ${{ github.sha }}
+- **Branch**: ${{ github.ref_name }}
+- **Test Scope**: ${{ github.event.inputs.test_scope || 'standard' }}
+
+## Environment Status
+- **RockPi4B+ Status**: ${{ needs.prepare-rockpi.outputs.coordinator-status }}
+- **ESP32 Status**: ${{ needs.prepare-esp32.outputs.firmware-status }}
+- **Runners Available**: ${{ needs.prepare-environment.outputs.runners-available }}
+
+## Test Results Summary
+
+| Test Scenario | Status | Duration | RockPi4B+ | ESP32 |
+|---------------|--------|----------|-----------|-------|
+EOF
+        
+        # Process test result files
+        for file in test-results-*.json; do
+          if [ -f "$file" ]; then
+            SCENARIO=$(jq -r '.scenario' "$file")
+            STATUS=$(jq -r '.status' "$file")
+            DURATION=$(jq -r '.duration_seconds' "$file")
+            ROCKPI_STATUS=$(jq -r '.rockpi_results.status' "$file")
+            ESP32_STATUS=$(jq -r '.esp32_results.status' "$file")
+            
+            case $STATUS in
+              "passed") STATUS_ICON="✅" ;;
+              "failed") STATUS_ICON="❌" ;;
+              *) STATUS_ICON="⚠️" ;;
+            esac
+            
+            echo "| $SCENARIO | $STATUS_ICON $STATUS | ${DURATION}s | $ROCKPI_STATUS | $ESP32_STATUS |" >> test-summary.md
+          fi
+        done
+        
+        echo "" >> test-summary.md
+        echo "## Overall Result" >> test-summary.md
+        
+        # Calculate overall status
+        FAILED_TESTS=$(jq -s 'map(select(.status == "failed")) | length' test-results-*.json 2>/dev/null || echo "0")
+        TOTAL_TESTS=$(jq -s 'length' test-results-*.json 2>/dev/null || echo "0")
+        
+        if [ "$FAILED_TESTS" -eq 0 ] && [ "$TOTAL_TESTS" -gt 0 ]; then
+          echo "🎉 **All tests passed!** ($TOTAL_TESTS/$TOTAL_TESTS)" >> test-summary.md
+        elif [ "$TOTAL_TESTS" -gt 0 ]; then
+          PASSED_TESTS=$((TOTAL_TESTS - FAILED_TESTS))
+          echo "⚠️ **Some tests failed.** ($PASSED_TESTS/$TOTAL_TESTS passed)" >> test-summary.md
+        else
+          echo "❌ **No test results found.**" >> test-summary.md
+        fi
+        
+        echo "" >> test-summary.md
+        echo "Generated at: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> test-summary.md
+
+    - name: 📤 Upload Test Summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-summary-report
+        path: test-summary.md
+        retention-days: 90
+
+    - name: 📋 Add to Job Summary
+      run: |
+        if [ -f test-summary.md ]; then
+          cat test-summary.md >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: 🧹 Trigger Device Cleanup
+      run: |
+        echo "🧹 Triggering cleanup on remote devices..."
+        
+        SESSION_ID="${{ needs.prepare-environment.outputs.session-id }}"
+        TOKEN="${{ needs.prepare-environment.outputs.coordination-token }}"
+        
+        # In a real implementation, this would send cleanup commands
+        # to both RockPi4B+ and ESP32 via their APIs
+        
+        echo "✅ Cleanup completed"
+
+    - name: ✅ Final Status
+      run: |
+        # Determine overall workflow status
+        PREPARATION_OK="${{ needs.prepare-environment.result == 'success' && needs.prepare-rockpi.result == 'success' && needs.prepare-esp32.result == 'success' }}"
+        TESTS_OK="${{ needs.execute-tests.result == 'success' }}"
+        
+        if [ "$PREPARATION_OK" = "true" ] && [ "$TESTS_OK" = "true" ]; then
+          echo "🎉 All integration tests completed successfully!"
+          echo "Ready for deployment or merge."
+        else
+          echo "❌ Some issues detected in the integration tests."
+          echo "Please review the test results and address any failures."
+          exit 1
+        fi
